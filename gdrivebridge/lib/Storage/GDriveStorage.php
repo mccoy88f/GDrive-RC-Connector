@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace OCA\GDriveBridge\Storage;
 
 use OC\Files\Storage\DAV;
+use OCA\GDriveBridge\Service\BridgeService;
+use OCP\Files\StorageInvalidException;
+use OCP\Files\StorageNotAvailableException;
 use OCP\IConfig;
 use OCP\Server;
 
@@ -16,14 +19,32 @@ use OCP\Server;
  * funziona (passa da Sabre) ma download e upload no. Qui si consente l'indirizzo
  * locale solo per le richieste di questo storage, invece di attivare
  * allow_local_remote_servers per tutta l'istanza.
+ *
+ * Gli errori finiscono anche nel registro mostrato nelle impostazioni dell'utente.
  */
 class GDriveStorage extends DAV {
+	private string $ownerUid;
+
+	public function __construct($parameters) {
+		parent::__construct($parameters);
+		$this->ownerUid = (string)($parameters['gdb_uid'] ?? '');
+	}
+
 	private function requestOptions(array $options): array {
 		$options['auth'] = [$this->user, $this->password];
 		$options['verify'] = $this->verify;
 		$options['timeout'] = Server::get(IConfig::class)->getSystemValueInt('davstorage.request_timeout', 30);
 		$options['nextcloud'] = ['allow_local_address' => true];
 		return $options;
+	}
+
+	private function recordError(\Throwable $e, string $path): void {
+		try {
+			$bridge = Server::get(BridgeService::class);
+			$bridge->logError($this->ownerUid, $bridge->describeError($e), $path);
+		} catch (\Throwable) {
+			// il registro non deve mai interferire con l'operazione sui file
+		}
 	}
 
 	public function fopen($path, $mode) {
@@ -43,6 +64,10 @@ class GDriveStorage extends DAV {
 			if ($e->getResponse()->getStatusCode() === 404) {
 				return false;
 			}
+			$this->recordError($e, $path);
+			throw $e;
+		} catch (\Throwable $e) {
+			$this->recordError($e, $path);
 			throw $e;
 		}
 
@@ -59,11 +84,29 @@ class GDriveStorage extends DAV {
 		$this->statCache->remove($target);
 
 		$source = fopen($path, 'r');
-		$this->httpClientService->newClient()->put(
-			$this->createBaseUri() . $this->encodePath($target),
-			$this->requestOptions(['body' => $source])
-		);
+		try {
+			$this->httpClientService->newClient()->put(
+				$this->createBaseUri() . $this->encodePath($target),
+				$this->requestOptions(['body' => $source])
+			);
+		} catch (\Throwable $e) {
+			$this->recordError($e, $target);
+			throw $e;
+		}
 
 		$this->removeCachedFile($target);
+	}
+
+	protected function convertException(\Exception $e, $path = ''): void {
+		try {
+			parent::convertException($e, $path);
+		} catch (\Throwable $converted) {
+			// Solo gli errori veri (quelli che il DAV ignora non arrivano qui) e una
+			// volta sola: un errore già convertito torna qui una seconda volta
+			if (!($e instanceof StorageNotAvailableException) && !($e instanceof StorageInvalidException)) {
+				$this->recordError($e, (string)$path);
+			}
+			throw $converted;
+		}
 	}
 }

@@ -43,12 +43,6 @@
 					<?php endif; ?>
 				</p>
 			<?php endif; ?>
-			<?php if ($_['gdocsMode'] === 'link'): ?>
-				<p class="gdb-hint">
-					Documenti, Fogli e Presentazioni Google compaiono come file <code>.link.html</code>:
-					scaricali o aprili nel browser per modificarli direttamente su Google.
-				</p>
-			<?php endif; ?>
 			<form method="post" action="<?php p($_['disconnectUrl']); ?>">
 				<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
 				<button type="submit" class="button">Scollega Google Drive</button>
@@ -59,6 +53,54 @@
 			<p>Credenziali salvate. Ora autorizza l'accesso al tuo Drive.</p>
 			<a class="button primary" href="<?php p($_['startUrl']); ?>">Collega Google Drive</a>
 		</div>
+	<?php endif; ?>
+
+	<h3>Documenti, Fogli e Presentazioni Google</h3>
+	<p class="settings-hint">
+		I documenti creati con Google Docs, Fogli e Presentazioni non sono file veri e propri: esistono solo su Google.
+		Per mostrarli come <code>.docx</code>/<code>.xlsx</code>/<code>.pptx</code> andrebbero convertiti, ma Google non
+		dice quanto pesa la conversione finché non la si scarica tutta, quindi in Nextcloud risulterebbero vuoti.
+		I file normali caricati su Drive (PDF, Word, Excel, foto…) non hanno questo problema.
+	</p>
+	<form method="post" action="<?php p($_['gdocsUrl']); ?>" class="gdb-form">
+		<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
+		<label class="gdb-radio">
+			<input type="radio" name="gdocs" value="link"<?php if ($_['gdocsMode'] === 'link'): ?> checked<?php endif; ?>>
+			<span><strong>Mostrali come collegamenti</strong> (<code>Nome.link.html</code>): scaricandoli o aprendoli
+				nel browser si apre il documento su Google, dove puoi modificarlo.</span>
+		</label>
+		<label class="gdb-radio">
+			<input type="radio" name="gdocs" value="skip"<?php if ($_['gdocsMode'] === 'skip'): ?> checked<?php endif; ?>>
+			<span><strong>Nascondili</strong>: nella cartella compaiono solo i file normali.
+				I documenti restano su Google Drive, non vengono cancellati.</span>
+		</label>
+		<div><button type="submit" class="button">Salva scelta</button></div>
+	</form>
+
+	<h3>Registro errori</h3>
+	<?php if (empty($_['errors'])): ?>
+		<p class="settings-hint">Nessun errore registrato.</p>
+	<?php else: ?>
+		<p class="settings-hint">
+			Gli ultimi problemi della cartella «<?php p($_['mountName']); ?>», dal più recente.
+			Se un errore si ripete, il numero tra parentesi indica quante volte.
+		</p>
+		<table class="gdb-errors">
+			<thead><tr><th>Quando</th><th>File</th><th>Errore</th></tr></thead>
+			<tbody>
+			<?php foreach ($_['errors'] as $e): ?>
+				<tr>
+					<td class="gdb-nowrap"><?php p($e['when']); ?><?php if ($e['count'] > 1): ?> (<?php p($e['count']); ?>×)<?php endif; ?></td>
+					<td><?php p($e['path'] !== '' ? $e['path'] : '—'); ?></td>
+					<td><?php p($e['message']); ?></td>
+				</tr>
+			<?php endforeach; ?>
+			</tbody>
+		</table>
+		<form method="post" action="<?php p($_['clearErrorsUrl']); ?>">
+			<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
+			<button type="submit" class="button">Svuota registro</button>
+		</form>
 	<?php endif; ?>
 
 	<h3>Credenziali OAuth del tuo progetto Google</h3>

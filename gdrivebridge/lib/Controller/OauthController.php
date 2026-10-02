@@ -84,6 +84,7 @@ class OauthController extends Controller {
 				'Google Drive collegato! Lo trovi nei File come cartella «' . $this->bridge->getMountName() . '».');
 		} catch (\RuntimeException $e) {
 			$this->bridge->setFlash($uid, 'error', $e->getMessage());
+			$this->bridge->logError($uid, 'Collegamento non riuscito: ' . $e->getMessage());
 		}
 		return $this->back();
 	}
@@ -94,6 +95,32 @@ class OauthController extends Controller {
 		$uid = $this->uid();
 		$this->bridge->disconnect($uid);
 		$this->bridge->setFlash($uid, 'ok', 'Google Drive scollegato.');
+		return $this->back();
+	}
+
+	/** @NoAdminRequired */
+	#[NoAdminRequired]
+	public function saveGdocs(string $gdocs = ''): RedirectResponse {
+		$uid = $this->uid();
+		try {
+			if ($this->bridge->setGdocsMode($uid, $gdocs)) {
+				$this->bridge->setFlash($uid, 'ok', 'Scelta salvata: ricarica la cartella «' . $this->bridge->getMountName() . '».');
+			} else {
+				$this->bridge->setFlash($uid, 'error',
+					'Scelta salvata, ma non è stato possibile applicarla ora (Google non risponde o l\'accesso è scaduto): verrà applicata al prossimo collegamento.');
+			}
+		} catch (\InvalidArgumentException $e) {
+			$this->bridge->setFlash($uid, 'error', $e->getMessage());
+		}
+		return $this->back();
+	}
+
+	/** @NoAdminRequired */
+	#[NoAdminRequired]
+	public function clearErrors(): RedirectResponse {
+		$uid = $this->uid();
+		$this->bridge->clearErrors($uid);
+		$this->bridge->setFlash($uid, 'ok', 'Registro errori svuotato.');
 		return $this->back();
 	}
 }

@@ -69,12 +69,12 @@ occ config:app:set gdrivebridge mount_name --value="Google Drive"   # nome della
 occ config:app:set gdrivebridge bridge_dir --value=/gdrive-bridge     # cartella condivisa
 occ config:app:set gdrivebridge previews --value=yes                # anteprime nella cartella (spente di default:
                                                                     # ognuna scarica il file intero da Google)
-occ config:app:set gdrivebridge gdocs --value=link                   # Documenti/Fogli Google: link (default, file .link.html
-                                                                    # che aprono il documento su Google), skip (nascosti),
-                                                                    # export (convertiti in docx/xlsx: rclone li mostra vuoti)
+occ config:app:set gdrivebridge gdocs --value=skip                   # scelta predefinita per Documenti/Fogli Google:
+                                                                    # link (default, file .link.html che aprono il
+                                                                    # documento su Google) o skip (nascosti)
 ```
-Dopo aver cambiato `gdocs`, ogni utente deve aprire una volta la pagina delle impostazioni
-(che aggiorna il collegamento) e va riavviato rclone: `docker restart gdrive-rclone`.
+Ogni utente può comunque cambiare la scelta per i documenti Google nelle proprie
+impostazioni, dove trova anche il **registro errori** della cartella Google Drive.
 
 ## Uso (ogni utente)
 Impostazioni personali → **Google Drive**: la pagina contiene la guida per creare il

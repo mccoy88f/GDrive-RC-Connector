@@ -5,7 +5,7 @@
     <name>Google Drive Bridge</name>
     <summary>Collega il tuo Google Drive come cartella nei File, con le tue credenziali OAuth</summary>
     <description>Ogni utente inserisce il client OAuth del proprio progetto Google, fa login e trova Google Drive come cartella nei File. Il traffico passa da un container rclone (serve webdav con auth-proxy).</description>
-    <version>0.1.4</version>
+    <version>0.1.5</version>
     <licence>agpl</licence>
     <author>Antonello Migliorelli</author>
     <namespace>GDriveBridge</namespace>

@@ -38,6 +38,7 @@ class MountProvider implements IMountProvider {
 					'password' => $creds['password'],
 					'root' => '/',
 					'secure' => false,
+					'gdb_uid' => $uid,
 				],
 				$loader,
 				[

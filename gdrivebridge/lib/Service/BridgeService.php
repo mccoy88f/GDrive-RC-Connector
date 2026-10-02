@@ -29,6 +29,8 @@ class BridgeService {
 	private const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 	private const ABOUT_URL = 'https://www.googleapis.com/drive/v3/about?fields=user';
 	private const SCOPE = 'https://www.googleapis.com/auth/drive';
+	private const GDOCS_MODES = ['link', 'skip'];
+	private const MAX_ERRORS = 20;
 
 	public function __construct(
 		private IConfig $config,
@@ -62,14 +64,17 @@ class BridgeService {
 	}
 
 	/**
-	 * Come mostrare Documenti/Fogli/Presentazioni Google:
-	 * 'link' (default) collegamenti .link.html che aprono il documento su Google,
-	 * 'skip' nascosti, 'export' convertiti in docx/xlsx/pptx (con rclone serve
-	 * risultano di dimensione 0 e Nextcloud li apre vuoti).
+	 * Come mostrare Documenti/Fogli/Presentazioni Google (scelta dell'utente,
+	 * predefinita dall'amministratore): 'link' collegamenti .link.html che aprono
+	 * il documento su Google, 'skip' nascosti. Convertirli in docx/xlsx non è
+	 * un'opzione: con rclone serve risultano di dimensione 0 e si aprono vuoti.
 	 */
-	public function getGdocsMode(): string {
-		$mode = $this->config->getAppValue(self::APP, 'gdocs', 'link');
-		return in_array($mode, ['link', 'skip', 'export'], true) ? $mode : 'link';
+	public function getGdocsMode(string $uid): string {
+		$mode = $this->get($uid, 'gdocs');
+		if ($mode === '') {
+			$mode = $this->config->getAppValue(self::APP, 'gdocs', 'link');
+		}
+		return in_array($mode, self::GDOCS_MODES, true) ? $mode : 'link';
 	}
 
 	public function isBridgeDirWritable(): bool {
@@ -174,37 +179,26 @@ class BridgeService {
 	 *                'client' (Client ID/secret non più validi) | 'unknown' (Google non raggiungibile)
 	 */
 	public function checkToken(string $uid): string {
-		$refresh = $this->get($uid, 'refresh_token', true);
-		if ($refresh === '') {
+		if ($this->get($uid, 'refresh_token', true) === '') {
 			return 'expired';
 		}
-		try {
-			$response = $this->clientService->newClient()->post(self::TOKEN_URL, [
-				'body' => [
-					'grant_type' => 'refresh_token',
-					'refresh_token' => $refresh,
-					'client_id' => $this->getClientId($uid),
-					'client_secret' => $this->get($uid, 'client_secret', true),
-				],
-				'timeout' => 5,
-				'http_errors' => false,
-			]);
-		} catch (\Throwable $e) {
-			$this->logger->info('Verifica del token Google non riuscita', ['app' => self::APP, 'exception' => $e]);
+		$result = $this->fetchToken($uid);
+		if ($result === null) {
 			return 'unknown';
 		}
 
-		$status = $response->getStatusCode();
+		[$status, $data] = $result;
 		if ($status === 200) {
-			$this->refreshBridgeFile($uid, (string)$response->getBody());
+			$this->refreshBridgeFile($uid, $data);
 			return 'ok';
 		}
-		$data = json_decode((string)$response->getBody(), true);
-		$error = is_array($data) ? (string)($data['error'] ?? '') : '';
+		$error = (string)($data['error'] ?? '');
 		if ($error === 'invalid_grant') {
+			$this->logError($uid, 'Google ha rifiutato l\'accesso: token scaduto o revocato. Ricollega Google Drive.');
 			return 'expired';
 		}
 		if ($error === 'invalid_client' || $error === 'unauthorized_client') {
+			$this->logError($uid, 'Google non accetta più Client ID o Client secret (' . $error . ').');
 			return 'client';
 		}
 		$this->logger->info('Verifica del token Google: risposta ' . $status . ' ' . $error, ['app' => self::APP]);
@@ -212,23 +206,74 @@ class BridgeService {
 	}
 
 	/**
-	 * Riscrive il file per rclone con il nuovo access token e le impostazioni
-	 * attuali (es. gdocs), così le modifiche valgono senza ricollegarsi.
+	 * Chiede a Google un nuovo access token con il refresh token salvato.
+	 *
+	 * @return array{0: int, 1: array}|null stato HTTP e risposta, null se Google non risponde
 	 */
-	private function refreshBridgeFile(string $uid, string $tokenResponse): void {
-		$creds = $this->getDavCredentials($uid);
-		$data = json_decode($tokenResponse, true);
-		$access = is_array($data) ? (string)($data['access_token'] ?? '') : '';
-		if ($creds === null || $access === '') {
-			return;
-		}
+	private function fetchToken(string $uid): ?array {
 		try {
-			$this->writeBridgeFile($creds['user'], $creds['password'], $this->getClientId($uid),
+			$response = $this->clientService->newClient()->post(self::TOKEN_URL, [
+				'body' => [
+					'grant_type' => 'refresh_token',
+					'refresh_token' => $this->get($uid, 'refresh_token', true),
+					'client_id' => $this->getClientId($uid),
+					'client_secret' => $this->get($uid, 'client_secret', true),
+				],
+				'timeout' => 5,
+				'http_errors' => false,
+			]);
+		} catch (\Throwable $e) {
+			$this->logger->info('Richiesta del token Google non riuscita', ['app' => self::APP, 'exception' => $e]);
+			return null;
+		}
+		$data = json_decode((string)$response->getBody(), true);
+		return [$response->getStatusCode(), is_array($data) ? $data : []];
+	}
+
+	/**
+	 * Riscrive il file per rclone con il nuovo access token e le impostazioni
+	 * attuali. Con $rotate cambia anche la password WebDAV: rclone tiene in cache
+	 * il backend per ogni password, quindi solo così le modifiche valgono subito.
+	 */
+	private function refreshBridgeFile(string $uid, array $token, bool $rotate = false): bool {
+		$creds = $this->getDavCredentials($uid);
+		$access = (string)($token['access_token'] ?? '');
+		if ($creds === null || $access === '') {
+			return false;
+		}
+		$pass = $rotate ? $this->random->generate(48, ISecureRandom::CHAR_ALPHANUMERIC) : $creds['password'];
+		try {
+			$this->writeBridgeFile($uid, $creds['user'], $pass, $this->getClientId($uid),
 				$this->get($uid, 'client_secret', true), $access, $this->get($uid, 'refresh_token', true),
-				gmdate('Y-m-d\TH:i:s\Z', time() + (int)($data['expires_in'] ?? 3600)));
+				gmdate('Y-m-d\TH:i:s\Z', time() + (int)($token['expires_in'] ?? 3600)));
 		} catch (\Throwable $e) {
 			$this->logger->warning('Aggiornamento del file per rclone non riuscito', ['app' => self::APP, 'exception' => $e]);
+			$this->logError($uid, 'Aggiornamento del collegamento con rclone non riuscito: ' . $e->getMessage());
+			return false;
 		}
+		if ($rotate) {
+			$this->removeBridgeFile($uid);
+			$this->set($uid, 'dav_pass', $pass, true);
+			$this->invalidateMounts($uid);
+		}
+		return true;
+	}
+
+	/**
+	 * Salva la scelta per i documenti Google e, se collegato, la applica subito.
+	 *
+	 * @return bool false se è salvata ma verrà applicata solo al prossimo collegamento
+	 */
+	public function setGdocsMode(string $uid, string $mode): bool {
+		if (!in_array($mode, self::GDOCS_MODES, true)) {
+			throw new \InvalidArgumentException('Scelta non valida.');
+		}
+		$this->set($uid, 'gdocs', $mode);
+		if (!$this->isConnected($uid)) {
+			return true;
+		}
+		$result = $this->fetchToken($uid);
+		return $result !== null && $result[0] === 200 && $this->refreshBridgeFile($uid, $result[1], true);
 	}
 
 	/* ---------- Flusso OAuth ---------- */
@@ -302,7 +347,7 @@ class BridgeService {
 		$this->removeBridgeFile($uid);
 		$davUser = 'u' . $this->random->generate(15, ISecureRandom::CHAR_ALPHANUMERIC);
 		$davPass = $this->random->generate(48, ISecureRandom::CHAR_ALPHANUMERIC);
-		$this->writeBridgeFile($davUser, $davPass, $clientId, $clientSecret, $access, $refresh, $expiry);
+		$this->writeBridgeFile($uid, $davUser, $davPass, $clientId, $clientSecret, $access, $refresh, $expiry);
 
 		$this->set($uid, 'refresh_token', $refresh, true);
 		$this->set($uid, 'google_email', $email);
@@ -342,7 +387,7 @@ class BridgeService {
 		return $this->getBridgeDir() . '/' . hash('sha256', $davUser . ':' . $davPass) . '.json';
 	}
 
-	private function writeBridgeFile(string $davUser, string $davPass, string $clientId, string $clientSecret,
+	private function writeBridgeFile(string $uid, string $davUser, string $davPass, string $clientId, string $clientSecret,
 		string $access, string $refresh, string $expiry): void {
 		if (!$this->isBridgeDirWritable()) {
 			throw new \RuntimeException(sprintf(
@@ -367,7 +412,7 @@ class BridgeService {
 			'token' => $token,
 		];
 		// rclone vuole solo stringhe nella risposta dell'auth-proxy
-		switch ($this->getGdocsMode()) {
+		switch ($this->getGdocsMode($uid)) {
 			case 'link':
 				$config['export_formats'] = 'link.html';
 				break;
@@ -396,6 +441,61 @@ class BridgeService {
 		if (is_file($path)) {
 			@unlink($path);
 		}
+	}
+
+	/* ---------- Registro errori (mostrato nelle impostazioni) ---------- */
+
+	public function logError(string $uid, string $message, string $path = ''): void {
+		if ($uid === '') {
+			return;
+		}
+		$message = mb_substr(trim($message), 0, 500);
+		$errors = $this->getErrors($uid);
+		$now = time();
+		$last = $errors[0] ?? null;
+		if ($last !== null && $last['message'] === $message && $last['path'] === $path) {
+			// Stesso errore ripetuto (es. editor che riprova): una riga sola con il conteggio
+			$errors[0]['time'] = $now;
+			$errors[0]['count']++;
+		} else {
+			array_unshift($errors, ['time' => $now, 'message' => $message, 'path' => $path, 'count' => 1]);
+			$errors = array_slice($errors, 0, self::MAX_ERRORS);
+		}
+		$this->set($uid, 'errors', json_encode($errors));
+	}
+
+	/** @return list<array{time: int, message: string, path: string, count: int}> */
+	public function getErrors(string $uid): array {
+		$data = json_decode($this->get($uid, 'errors'), true);
+		return is_array($data) ? array_values($data) : [];
+	}
+
+	public function clearErrors(string $uid): void {
+		$this->del($uid, 'errors');
+	}
+
+	/** Spiega in italiano gli errori più comuni della cartella Google Drive */
+	public function describeError(\Throwable $e): string {
+		$text = $e->getMessage();
+		$hints = [
+			'violates local access' => 'Nextcloud ha bloccato la connessione verso rclone (indirizzo interno): aggiorna l\'app.',
+			'401' => 'rclone ha rifiutato le credenziali: apri le impostazioni o ricollega Google Drive.',
+			'Unauthorized' => 'rclone ha rifiutato le credenziali: apri le impostazioni o ricollega Google Drive.',
+			'cURL error 28' => 'Tempo scaduto: Google o rclone non hanno risposto in tempo.',
+			'timed out' => 'Tempo scaduto: Google o rclone non hanno risposto in tempo.',
+			'cURL error 6' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
+			'Could not resolve host' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
+			'Failed to connect' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
+			'cURL error 7' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
+			'Connection refused' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
+		];
+		foreach ($hints as $needle => $hint) {
+			if (stripos($text, (string)$needle) !== false) {
+				return $hint . ' (' . mb_substr($text, 0, 200) . ')';
+			}
+		}
+		$class = substr(strrchr('\\' . get_class($e), '\\'), 1);
+		return $class . ': ' . mb_substr($text, 0, 300);
 	}
 
 	/* ---------- Messaggi per la pagina impostazioni ---------- */

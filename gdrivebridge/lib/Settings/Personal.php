@@ -7,6 +7,7 @@ namespace OCA\GDriveBridge\Settings;
 use OCA\GDriveBridge\AppInfo\Application;
 use OCA\GDriveBridge\Service\BridgeService;
 use OCP\AppFramework\Http\TemplateResponse;
+use OCP\IDateTimeFormatter;
 use OCP\IURLGenerator;
 use OCP\IUserSession;
 use OCP\Settings\ISettings;
@@ -17,6 +18,7 @@ class Personal implements ISettings {
 		private BridgeService $bridge,
 		private IUserSession $userSession,
 		private IURLGenerator $urlGenerator,
+		private IDateTimeFormatter $dateFormatter,
 	) {
 	}
 
@@ -37,7 +39,12 @@ class Personal implements ISettings {
 			'bridgeOk' => $this->bridge->isBridgeDirWritable(),
 			'bridgeDir' => $this->bridge->getBridgeDir(),
 			'mountName' => $this->bridge->getMountName(),
-			'gdocsMode' => $this->bridge->getGdocsMode(),
+			'gdocsMode' => $this->bridge->getGdocsMode($uid),
+			'errors' => array_map(fn (array $e) => $e + [
+				'when' => $this->dateFormatter->formatDateTime($e['time'], 'short', 'medium'),
+			], $this->bridge->getErrors($uid)),
+			'gdocsUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.saveGdocs'),
+			'clearErrorsUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.clearErrors'),
 			'saveUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.saveCredentials'),
 			'startUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.start'),
 			'disconnectUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.disconnect'),
