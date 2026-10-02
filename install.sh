@@ -61,9 +61,20 @@ err()  { echo -e "\e[1;31m[ERRORE]\e[0m $*" >&2; exit 1; }
 
 # Con "curl | bash" lo script arriva da stdin: le risposte si leggono dal terminale
 has_tty() { { : < /dev/tty; } 2>/dev/null; }
+# Legge un carattere alla volta: alcuni terminali web (es. quello di Coolify) mandano
+# l'Invio come \r invece di \n, e un normale "read" resterebbe in attesa per sempre
 ask() {
-	local answer=""
-	has_tty && { read -r -p "$1" answer < /dev/tty || true; }
+	local answer="" c
+	if ! has_tty; then echo "$2"; return; fi
+	printf '%s' "$1" > /dev/tty
+	while IFS= read -r -s -n 1 c < /dev/tty; do
+		case "$c" in
+			$'\r' | $'\n' | '') break ;;
+			$'\x7f' | $'\b') [[ -n "$answer" ]] && { answer="${answer%?}"; printf '\b \b' > /dev/tty; } ;;
+			*) answer+="$c"; printf '%s' "$c" > /dev/tty ;;
+		esac
+	done
+	printf '\n' > /dev/tty
 	echo "${answer:-$2}"
 }
 
