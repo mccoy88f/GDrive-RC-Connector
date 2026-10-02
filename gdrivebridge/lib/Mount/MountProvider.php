@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace OCA\GDriveBridge\Mount;
 
 use OC\Files\Mount\MountPoint;
-use OC\Files\Storage\DAV;
+use OCA\GDriveBridge\Storage\GDriveStorage;
 use OCA\GDriveBridge\Service\BridgeService;
 use OCP\Files\Config\IMountProvider;
 use OCP\Files\Storage\IStorageFactory;
@@ -30,7 +30,7 @@ class MountProvider implements IMountProvider {
 
 		return [
 			new MountPoint(
-				DAV::class,
+				GDriveStorage::class,
 				'/' . $uid . '/files/' . $this->bridge->getMountName(),
 				[
 					'host' => $this->bridge->getRcloneHost(),
