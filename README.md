@@ -67,6 +67,8 @@ docker exec -u www-data NOME_CONTAINER_NEXTCLOUD php occ config:app:set gdrivebr
 ```bash
 occ config:app:set gdrivebridge mount_name --value="Google Drive"   # nome della cartella
 occ config:app:set gdrivebridge bridge_dir --value=/gdrive-bridge     # cartella condivisa
+occ config:app:set gdrivebridge previews --value=yes                # anteprime nella cartella (spente di default:
+                                                                    # ognuna scarica il file intero da Google)
 ```
 
 ## Uso (ogni utente)

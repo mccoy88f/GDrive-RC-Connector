@@ -56,6 +56,11 @@ class BridgeService {
 		return $this->config->getAppValue(self::APP, 'mount_name', 'Google Drive');
 	}
 
+	/** Anteprime nella cartella: spente di default, ogni anteprima scarica il file intero da Google */
+	public function previewsEnabled(): bool {
+		return $this->config->getAppValue(self::APP, 'previews', 'no') === 'yes';
+	}
+
 	public function isBridgeDirWritable(): bool {
 		$dir = $this->getBridgeDir();
 		return is_dir($dir) && is_writable($dir);

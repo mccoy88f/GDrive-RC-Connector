@@ -40,7 +40,10 @@ class MountProvider implements IMountProvider {
 					'secure' => false,
 				],
 				$loader,
-				['filesystem_check_changes' => 1],
+				[
+					'filesystem_check_changes' => 1,
+					'previews' => $this->bridge->previewsEnabled(),
+				],
 				null,
 				self::class
 			),
