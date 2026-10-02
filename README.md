@@ -11,7 +11,22 @@ Browser ──login Google──▶ Nextcloud (app gdrivebridge)
                      rclone serve webdav --auth-proxy ──▶ Google Drive dell'utente
 ```
 
-## Installazione (una volta sola, sul server)
+## Installazione automatica (consigliata)
+
+Dal **terminale del server** (in Coolify: *Servers → il tuo server → Terminal*),
+non dal terminale del container Nextcloud:
+```bash
+curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash
+```
+Se hai più container Nextcloud aggiungi il nome: `... | sudo bash -s -- NOME_CONTAINER_NEXTCLOUD`.
+
+Lo script trova il container Nextcloud, crea la cartella condivisa dentro la
+cartella dati di Nextcloud (già persistente, quindi senza volumi da aggiungere),
+installa e abilita l'app, avvia il container rclone sulla stessa rete e verifica il collegamento.
+Si può rilanciare in qualsiasi momento, per esempio per aggiornare l'app o se un
+aggiornamento di Nextcloud l'ha disattivata.
+
+## Installazione manuale (una volta sola, sul server)
 
 ### 1. Cartelle condivise sull'host
 Copia `server/setup-bridge.sh` sul server e lancialo:
