@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>gdrivebridge</id>
+    <name>Google Drive Bridge</name>
+    <summary>Collega il tuo Google Drive come cartella nei File, con le tue credenziali OAuth</summary>
+    <description>Ogni utente inserisce il client OAuth del proprio progetto Google, fa login e trova Google Drive come cartella nei File. Il traffico passa da un container rclone (serve webdav con auth-proxy).</description>
+    <version>0.1.0</version>
+    <licence>agpl</licence>
+    <author>Antonello Migliorelli</author>
+    <namespace>GDriveBridge</namespace>
+    <category>files</category>
+    <bugs>https://localhost</bugs>
+    <dependencies>
+        <php min-version="8.1"/>
+        <nextcloud min-version="30" max-version="35"/>
+    </dependencies>
+    <settings>
+        <personal>OCA\GDriveBridge\Settings\Personal</personal>
+        <personal-section>OCA\GDriveBridge\Settings\PersonalSection</personal-section>
+    </settings>
+</info>
