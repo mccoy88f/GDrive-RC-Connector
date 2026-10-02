@@ -150,6 +150,50 @@ class BridgeService {
 		return ['user' => $this->get($uid, 'dav_user'), 'password' => $pass];
 	}
 
+	/**
+	 * Chiede a Google un nuovo access token con il refresh token salvato,
+	 * per capire se il collegamento funziona ancora.
+	 *
+	 * @return string 'ok' | 'expired' (token scaduto o revocato) |
+	 *                'client' (Client ID/secret non più validi) | 'unknown' (Google non raggiungibile)
+	 */
+	public function checkToken(string $uid): string {
+		$refresh = $this->get($uid, 'refresh_token', true);
+		if ($refresh === '') {
+			return 'expired';
+		}
+		try {
+			$response = $this->clientService->newClient()->post(self::TOKEN_URL, [
+				'body' => [
+					'grant_type' => 'refresh_token',
+					'refresh_token' => $refresh,
+					'client_id' => $this->getClientId($uid),
+					'client_secret' => $this->get($uid, 'client_secret', true),
+				],
+				'timeout' => 5,
+				'http_errors' => false,
+			]);
+		} catch (\Throwable $e) {
+			$this->logger->info('Verifica del token Google non riuscita', ['app' => self::APP, 'exception' => $e]);
+			return 'unknown';
+		}
+
+		$status = $response->getStatusCode();
+		if ($status === 200) {
+			return 'ok';
+		}
+		$data = json_decode((string)$response->getBody(), true);
+		$error = is_array($data) ? (string)($data['error'] ?? '') : '';
+		if ($error === 'invalid_grant') {
+			return 'expired';
+		}
+		if ($error === 'invalid_client' || $error === 'unauthorized_client') {
+			return 'client';
+		}
+		$this->logger->info('Verifica del token Google: risposta ' . $status . ' ' . $error, ['app' => self::APP]);
+		return 'unknown';
+	}
+
 	/* ---------- Flusso OAuth ---------- */
 
 	public function buildAuthUrl(string $uid): string {

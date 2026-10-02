@@ -23,13 +23,15 @@ class Personal implements ISettings {
 	public function getForm(): TemplateResponse {
 		$uid = $this->userSession->getUser()?->getUID() ?? '';
 		Util::addStyle(Application::APP_ID, 'personal');
+		$connected = $this->bridge->isConnected($uid);
 
 		return new TemplateResponse(Application::APP_ID, 'personal', [
 			'flash' => $this->bridge->popFlash($uid),
 			'clientId' => $this->bridge->getClientId($uid),
 			'hasSecret' => $this->bridge->hasClientSecret($uid),
 			'hasCredentials' => $this->bridge->hasClientCredentials($uid),
-			'connected' => $this->bridge->isConnected($uid),
+			'connected' => $connected,
+			'tokenStatus' => $connected ? $this->bridge->checkToken($uid) : '',
 			'email' => $this->bridge->getGoogleEmail($uid),
 			'redirectUri' => $this->bridge->getRedirectUri(),
 			'bridgeOk' => $this->bridge->isBridgeDirWritable(),

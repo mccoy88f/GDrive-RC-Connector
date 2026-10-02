@@ -23,9 +23,26 @@
 
 	<?php if ($_['connected']): ?>
 		<div class="gdb-box">
-			<p>
-				<strong>Collegato</strong><?php if ($_['email'] !== ''): ?> all'account <?php p($_['email']); ?><?php endif; ?>.
-			</p>
+			<?php if ($_['tokenStatus'] === 'expired'): ?>
+				<p class="gdb-msg gdb-error">
+					<strong>Accesso a Google scaduto o revocato</strong><?php if ($_['email'] !== ''): ?> per l'account <?php p($_['email']); ?><?php endif; ?>:
+					la cartella «<?php p($_['mountName']); ?>» non funziona finché non ricolleghi.
+					Se succede ogni 7 giorni, l'app su Google Cloud è ancora in "Test": pubblicala (vedi guida sotto).
+				</p>
+				<p><a class="button primary" href="<?php p($_['startUrl']); ?>">Ricollega Google Drive</a></p>
+			<?php elseif ($_['tokenStatus'] === 'client'): ?>
+				<p class="gdb-msg gdb-error">
+					<strong>Google non accetta più Client ID o Client secret</strong> (client eliminato o secret rigenerato?):
+					aggiorna le credenziali qui sotto e ricollega.
+				</p>
+			<?php else: ?>
+				<p>
+					<strong>Collegato</strong><?php if ($_['email'] !== ''): ?> all'account <?php p($_['email']); ?><?php endif; ?>.
+					<?php if ($_['tokenStatus'] === 'unknown'): ?>
+						<span class="gdb-hint">(al momento non è possibile verificare l'accesso con Google)</span>
+					<?php endif; ?>
+				</p>
+			<?php endif; ?>
 			<form method="post" action="<?php p($_['disconnectUrl']); ?>">
 				<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
 				<button type="submit" class="button">Scollega Google Drive</button>

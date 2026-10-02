@@ -36,3 +36,4 @@
 #gdrivebridge .gdb-guide li { margin-bottom: 8px; }
 #gdrivebridge .gdb-redirect { display: block; width: 100%; margin-top: 6px; font-family: monospace; }
 #gdrivebridge code { font-family: monospace; }
+#gdrivebridge .gdb-hint { color: var(--color-text-maxcontrast); }
