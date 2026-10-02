@@ -80,6 +80,21 @@ impostazioni, dove trova anche il **registro errori** della cartella Google Driv
 Impostazioni personali → **Google Drive**: la pagina contiene la guida per creare il
 client OAuth su Google Cloud e mostra l'URI di reindirizzamento da copiare.
 
+## File grandi
+- **Download**: il file arriva all'utente mentre scende da Google (nessuna attesa iniziale,
+  nessun limite di durata). Si interrompe solo se Google/rclone restano fermi per 120 secondi.
+- **Upload**: Nextcloud consegna il file a rclone, che lo mette nella sua cache e lo invia a
+  Google subito dopo, in background. Il caricamento risulta quindi completato in Nextcloud
+  prima che il file sia davvero su Google: per i file molto grandi può servire qualche minuto.
+  Serve spazio su disco per circa due volte la dimensione del file (temporanei di Nextcloud
+  e cache di rclone). Limite di tempo per la consegna a rclone: 1 ora
+  (`occ config:app:set gdrivebridge upload_timeout --value=SECONDI`).
+- **Non riavviare rclone mentre carica** (`docker restart gdrive-rclone`): i file ancora in coda
+  andrebbero persi. Lo script di installazione aspetta da solo che gli invii finiscano.
+  Per vedere se ci sono invii in corso: `docker logs -f gdrive-rclone`.
+- **Video**: si possono guardare, ma ogni spostamento nella riproduzione riparte a scaricare
+  dal file da Google, quindi con video lunghi è lento.
+
 ## Problemi comuni
 - **L'URI di reindirizzamento inizia con `http://`** anche se usi HTTPS: in `config.php`
   aggiungi `'overwriteprotocol' => 'https',`.

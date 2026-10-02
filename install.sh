@@ -20,6 +20,8 @@
 #   REPO=mccoy88f/gdrive-rc-connector
 #   RCLONE_NAME=gdrive-rclone   nome del container rclone
 #   PROXY_DIR=/data/gdrive-bridge/proxy   dove salvare l'auth-proxy sull'host
+#   UPLOAD_WAIT=3600      secondi massimi di attesa degli upload in corso prima di riavviare rclone
+#   FORCE=1               riavvia rclone senza aspettare (gli upload in coda vanno persi)
 # =============================================================================
 set -euo pipefail
 
@@ -130,6 +132,19 @@ for n in "${NETS[@]}"; do
 	[[ "$n" == "bridge" || "$n" == "host" ]] && err "Nextcloud usa la rete '$n': serve una rete Docker personalizzata (come quelle di Coolify o docker compose)."
 done
 
+# Gli upload vengono messi in cache da rclone e inviati a Google dopo: se rclone
+# viene ricreato prima, quelli in coda vanno persi. Si aspetta che finiscano.
+pending() {
+	docker exec "$RCLONE_NAME" sh -c 'grep -rlE "\"Dirty\": *true" /root/.cache/rclone/vfsMeta 2>/dev/null | wc -l' 2>/dev/null || echo 0
+}
+if docker inspect "$RCLONE_NAME" >/dev/null 2>&1 && [[ "${FORCE:-0}" != 1 ]]; then
+	waited=0
+	while (( $(pending) > 0 )); do
+		(( waited == 0 )) && log "rclone sta ancora inviando $(pending) file a Google: attendo che finisca (FORCE=1 per non aspettare)"
+		(( waited >= ${UPLOAD_WAIT:-3600} )) && err "Upload ancora in corso dopo $waited secondi: riprova più tardi, o rilancia con FORCE=1 (i file in coda andrebbero persi)."
+		sleep 10; waited=$((waited + 10))
+	done
+fi
 docker rm -f "$RCLONE_NAME" >/dev/null 2>&1 || true
 docker pull -q rclone/rclone:latest >/dev/null
 docker run -d --name "$RCLONE_NAME" --restart unless-stopped \
