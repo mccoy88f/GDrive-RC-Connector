@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace OCA\GDriveBridge\Service;
 
 use OCA\GDriveBridge\AppInfo\Application;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\Events\InvalidateMountCacheEvent;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
 use OCP\IURLGenerator;
+use OCP\IUserManager;
 use OCP\Security\ICrypto;
 use OCP\Security\ISecureRandom;
 use Psr\Log\LoggerInterface;
@@ -34,6 +37,8 @@ class BridgeService {
 		private IURLGenerator $urlGenerator,
 		private ISecureRandom $random,
 		private LoggerInterface $logger,
+		private IEventDispatcher $dispatcher,
+		private IUserManager $userManager,
 	) {
 	}
 
@@ -222,6 +227,7 @@ class BridgeService {
 		$this->set($uid, 'google_email', $email);
 		$this->set($uid, 'dav_user', $davUser);
 		$this->set($uid, 'dav_pass', $davPass, true);
+		$this->invalidateMounts($uid);
 	}
 
 	public function disconnect(string $uid): void {
@@ -235,6 +241,18 @@ class BridgeService {
 		}
 		$this->removeBridgeFile($uid);
 		$this->del($uid, 'refresh_token', 'google_email', 'dav_user', 'dav_pass', 'oauth_state');
+		$this->invalidateMounts($uid);
+	}
+
+	/**
+	 * Avvisa Nextcloud che i montaggi dell'utente sono cambiati, così la
+	 * cartella compare/sparisce subito anche nelle sottocartelle in cache.
+	 */
+	private function invalidateMounts(string $uid): void {
+		$user = $this->userManager->get($uid);
+		if ($user !== null) {
+			$this->dispatcher->dispatchTyped(new InvalidateMountCacheEvent($user));
+		}
 	}
 
 	/* ---------- File di collegamento per rclone ---------- */
