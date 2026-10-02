@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Google Drive Bridge - installazione completa in un colpo solo.
+#  Google Drive Bridge - installazione, aggiornamento e disinstallazione.
 #
 #  Va lanciato sul SERVER (host Docker), non dentro il container Nextcloud:
 #    curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash
-#  oppure, indicando il container:
-#    curl -fsSL .../install.sh | sudo bash -s -- NOME_CONTAINER_NEXTCLOUD
+#  All'avvio chiede se installare/aggiornare o disinstallare. Senza chiedere:
+#    ... | sudo bash -s -- install   [NOME_CONTAINER_NEXTCLOUD]
+#    ... | sudo bash -s -- uninstall [NOME_CONTAINER_NEXTCLOUD]
 #
-#  Cosa fa (si può rilanciare quante volte vuoi, anche per aggiornare l'app):
+#  Installazione (si può rilanciare quante volte vuoi, anche per aggiornare l'app):
 #   1. trova il container Nextcloud, la sua cartella dati e l'utente PHP
 #   2. crea la cartella condivisa DENTRO la cartella dati di Nextcloud
 #      (già persistente: nessun volume da aggiungere, sopravvive agli aggiornamenti)
@@ -22,6 +23,10 @@
 #   PROXY_DIR=/data/gdrive-bridge/proxy   dove salvare l'auth-proxy sull'host
 #   UPLOAD_WAIT=3600      secondi massimi di attesa degli upload in corso prima di riavviare rclone
 #   FORCE=1               riavvia rclone senza aspettare (gli upload in coda vanno persi)
+#
+#  Disinstallazione senza domande (es. in automatico):
+#   PURGE=1               rimuove anche collegamenti, credenziali e dati degli utenti
+#   YES=1                 non chiede conferma
 # =============================================================================
 set -euo pipefail
 
@@ -30,14 +35,45 @@ REF="${REF:-main}"
 RCLONE_NAME="${RCLONE_NAME:-gdrive-rclone}"
 PROXY_DIR="${PROXY_DIR:-/data/gdrive-bridge/proxy}"
 APP=gdrivebridge
-NC="${1:-}"
+ACTION="${ACTION:-}"
+NC=""
+for arg in "$@"; do
+	case "$arg" in
+		install|uninstall) ACTION="$arg" ;;
+		*) NC="$arg" ;;
+	esac
+done
 
 log()  { echo -e "\e[1;34m==>\e[0m $*"; }
 warn() { echo -e "\e[1;33m[ATTENZIONE]\e[0m $*" >&2; }
 err()  { echo -e "\e[1;31m[ERRORE]\e[0m $*" >&2; exit 1; }
 
+# Con "curl | bash" lo script arriva da stdin: le risposte si leggono dal terminale
+has_tty() { { : < /dev/tty; } 2>/dev/null; }
+ask() {
+	local answer=""
+	has_tty && { read -r -p "$1" answer < /dev/tty || true; }
+	echo "${answer:-$2}"
+}
+
 [[ $EUID -eq 0 ]] || err "Esegui come root (sudo)."
 command -v docker >/dev/null || err "Docker non trovato: lancia lo script sul server, non dentro un container."
+
+if [[ -z "$ACTION" ]]; then
+	if has_tty; then
+		echo
+		echo "Google Drive Bridge per Nextcloud"
+		echo "  1) Installa o aggiorna"
+		echo "  2) Disinstalla"
+		case "$(ask 'Scelta [1]: ' 1)" in
+			1) ACTION=install ;;
+			2) ACTION=uninstall ;;
+			*) err "Scelta non valida." ;;
+		esac
+	else
+		ACTION=install
+	fi
+fi
 
 # --- 1. Container Nextcloud --------------------------------------------------
 if [[ -z "$NC" ]]; then
@@ -62,6 +98,22 @@ occ() { docker exec -u "$NC_UID" -w "$WEB" "$NC" php occ "$@"; }
 DATADIR=$(occ config:system:get datadirectory | tr -d '\r')
 [[ -n "$DATADIR" ]] || err "Impossibile leggere datadirectory da config.php."
 
+# Gli upload vengono messi in cache da rclone e inviati a Google dopo: se rclone
+# viene ricreato o rimosso prima, quelli in coda vanno persi. Si aspetta che finiscano.
+pending() {
+	docker exec "$RCLONE_NAME" sh -c 'grep -rlE "\"Dirty\": *true" /root/.cache/rclone/vfsMeta 2>/dev/null | wc -l' 2>/dev/null || echo 0
+}
+wait_uploads() {
+	docker inspect "$RCLONE_NAME" >/dev/null 2>&1 || return 0
+	[[ "${FORCE:-0}" == 1 ]] && return 0
+	local waited=0
+	while (( $(pending) > 0 )); do
+		(( waited == 0 )) && log "rclone sta ancora inviando $(pending) file a Google: attendo che finisca (FORCE=1 per non aspettare)"
+		(( waited >= ${UPLOAD_WAIT:-3600} )) && err "Upload ancora in corso dopo $waited secondi: riprova più tardi, o rilancia con FORCE=1 (i file in coda andrebbero persi)."
+		sleep 10; waited=$((waited + 10))
+	done
+}
+
 # Percorso sull'host di un percorso del container (tramite i suoi volumi)
 host_path() {
 	local target="$1" best_dst="" best_src="" dst src
@@ -74,6 +126,105 @@ host_path() {
 	[[ -n "$best_dst" ]] || return 1
 	echo "${best_src}${target#"$best_dst"}"
 }
+
+APPS=$(docker exec "$NC" sh -c "[ -d '$WEB/custom_apps' ] && echo '$WEB/custom_apps' || echo '$WEB/apps'")
+
+# =============================================================================
+#  Disinstallazione
+# =============================================================================
+if [[ "$ACTION" == uninstall ]]; then
+	PURGE="${PURGE:-}"
+	if [[ -z "$PURGE" ]]; then
+		if has_tty; then
+			echo
+			echo "Cosa vuoi rimuovere?"
+			echo "  1) App e container rclone, ma conserva i collegamenti degli utenti"
+			echo "     (reinstallando, ognuno ritrova il proprio Google Drive già collegato)"
+			echo "  2) Tutto: scollega gli utenti da Google (revoca l'accesso), cancella le loro"
+			echo "     credenziali OAuth, il registro errori e le cartelle di collegamento"
+			case "$(ask 'Scelta [1]: ' 1)" in
+				1) PURGE=0 ;;
+				2) PURGE=1 ;;
+				*) err "Scelta non valida." ;;
+			esac
+		else
+			PURGE=0
+		fi
+	fi
+	if [[ "${YES:-0}" != 1 ]]; then
+		has_tty || err "Per disinstallare senza terminale aggiungi YES=1 (e PURGE=1 per rimuovere anche i dati)."
+		[[ "$PURGE" == 1 ]] && what="TUTTO (collegamenti e credenziali degli utenti compresi)" || what="app e rclone (i collegamenti restano)"
+		[[ "$(ask "Confermi la rimozione di: $what? [s/N] " n)" =~ ^[sSyY] ]] || { log "Annullato."; exit 0; }
+	fi
+
+	BRIDGE_DIR=$(occ config:app:get "$APP" bridge_dir 2>/dev/null | tr -d '\r' || true)
+	BRIDGE_DIR="${BRIDGE_DIR:-$DATADIR/.gdrive-bridge}"
+
+	# Gli upload in coda vanno lasciati finire prima di fermare rclone
+	wait_uploads
+
+	if [[ "$PURGE" == 1 ]] && docker exec "$NC" test -f "$APPS/$APP/appinfo/info.xml"; then
+		log "Scollego gli utenti da Google e cancello i loro dati"
+		docker exec -i -u "$NC_UID" "$NC" sh -c "cat > /tmp/gdrivebridge-purge.php" << 'PHP'
+<?php
+require $argv[1] . '/lib/base.php';
+$app = 'gdrivebridge';
+$db = \OCP\Server::get(\OCP\IDBConnection::class);
+$bridge = \OCP\Server::get(\OCA\GDriveBridge\Service\BridgeService::class);
+$host = $bridge->getRcloneHost();
+
+// Utenti collegati: revoca del token Google e rimozione del file per rclone
+$qb = $db->getQueryBuilder();
+$qb->selectDistinct('userid')->from('preferences')->where($qb->expr()->eq('appid', $qb->createNamedParameter($app)));
+$users = $qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN);
+foreach ($users as $uid) {
+	if ($bridge->isConnected($uid)) {
+		$bridge->disconnect($uid);
+		echo "  scollegato: $uid\n";
+	}
+}
+\OCP\Server::get(\OCP\IConfig::class)->deleteAppFromAllUsers($app);
+
+// Cache dei file della cartella Google Drive
+$qb = $db->getQueryBuilder();
+$qb->select('id')->from('storages')->where($qb->expr()->like('id', $qb->createNamedParameter('webdav::%@' . $db->escapeLikeParameter($host) . '/%')));
+foreach ($qb->executeQuery()->fetchAll(\PDO::FETCH_COLUMN) as $id) {
+	\OC\Files\Cache\Storage::remove($id);
+}
+echo '  utenti: ' . count($users) . "\n";
+PHP
+		docker exec -u "$NC_UID" "$NC" php /tmp/gdrivebridge-purge.php "$WEB" || warn "Pulizia dei dati utente non completata."
+		docker exec "$NC" rm -f /tmp/gdrivebridge-purge.php
+	fi
+
+	log "Disattivo e rimuovo l'app"
+	occ app:disable "$APP" >/dev/null 2>&1 || true
+	docker exec "$NC" rm -rf "$APPS/$APP"
+	if [[ "$PURGE" == 1 ]]; then
+		docker exec -u "$NC_UID" "$NC" php -r 'require $argv[1] . "/lib/base.php"; \OCP\Server::get(\OCP\IAppConfig::class)->deleteApp("gdrivebridge");' "$WEB" \
+			|| warn "Impostazioni dell'app non rimosse."
+	fi
+
+	log "Rimuovo il container rclone"
+	docker rm -f "$RCLONE_NAME" >/dev/null 2>&1 || true
+
+	if [[ "$PURGE" == 1 ]]; then
+		USERS_HOST=$(host_path "$BRIDGE_DIR" || true)
+		[[ -n "$USERS_HOST" && -d "$USERS_HOST" ]] && rm -rf "$USERS_HOST"
+		rm -rf "$PROXY_DIR"
+		rmdir "$(dirname "$PROXY_DIR")" 2>/dev/null || true
+		log "Rimossi anche collegamenti, credenziali e cartelle"
+	else
+		log "Collegamenti conservati in $BRIDGE_DIR: rilancia lo script per reinstallare"
+	fi
+	echo
+	log "Disinstallazione completata. L'immagine rclone/rclone resta sul server: docker rmi rclone/rclone per toglierla."
+	exit 0
+fi
+
+# =============================================================================
+#  Installazione / aggiornamento
+# =============================================================================
 
 # --- 2. Cartella condivisa (dentro la cartella dati, già persistente) --------
 BRIDGE_DIR="$DATADIR/.gdrive-bridge"
@@ -102,7 +253,6 @@ chmod 755 "$PROXY_DIR" "$PROXY_DIR/auth-proxy.sh"
 log "Auth-proxy: $PROXY_DIR/auth-proxy.sh"
 
 # --- 4. App Nextcloud --------------------------------------------------------
-APPS=$(docker exec "$NC" sh -c "[ -d '$WEB/custom_apps' ] && echo '$WEB/custom_apps' || echo '$WEB/apps'")
 host_path "$APPS" >/dev/null || warn "$APPS non è su un volume persistente: dopo un aggiornamento rilancia questo script."
 
 TMP=$(mktemp -d)
@@ -132,19 +282,7 @@ for n in "${NETS[@]}"; do
 	[[ "$n" == "bridge" || "$n" == "host" ]] && err "Nextcloud usa la rete '$n': serve una rete Docker personalizzata (come quelle di Coolify o docker compose)."
 done
 
-# Gli upload vengono messi in cache da rclone e inviati a Google dopo: se rclone
-# viene ricreato prima, quelli in coda vanno persi. Si aspetta che finiscano.
-pending() {
-	docker exec "$RCLONE_NAME" sh -c 'grep -rlE "\"Dirty\": *true" /root/.cache/rclone/vfsMeta 2>/dev/null | wc -l' 2>/dev/null || echo 0
-}
-if docker inspect "$RCLONE_NAME" >/dev/null 2>&1 && [[ "${FORCE:-0}" != 1 ]]; then
-	waited=0
-	while (( $(pending) > 0 )); do
-		(( waited == 0 )) && log "rclone sta ancora inviando $(pending) file a Google: attendo che finisca (FORCE=1 per non aspettare)"
-		(( waited >= ${UPLOAD_WAIT:-3600} )) && err "Upload ancora in corso dopo $waited secondi: riprova più tardi, o rilancia con FORCE=1 (i file in coda andrebbero persi)."
-		sleep 10; waited=$((waited + 10))
-	done
-fi
+wait_uploads
 docker rm -f "$RCLONE_NAME" >/dev/null 2>&1 || true
 docker pull -q rclone/rclone:latest >/dev/null
 docker run -d --name "$RCLONE_NAME" --restart unless-stopped \

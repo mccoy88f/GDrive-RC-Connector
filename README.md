@@ -18,13 +18,26 @@ non dal terminale del container Nextcloud:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash
 ```
+All'avvio chiede se **installare/aggiornare** o **disinstallare**.
 Se hai più container Nextcloud aggiungi il nome: `... | sudo bash -s -- NOME_CONTAINER_NEXTCLOUD`.
+Per saltare la domanda: `... | sudo bash -s -- install` (o `uninstall`).
 
 Lo script trova il container Nextcloud, crea la cartella condivisa dentro la
 cartella dati di Nextcloud (già persistente, quindi senza volumi da aggiungere),
 installa e abilita l'app, avvia il container rclone sulla stessa rete e verifica il collegamento.
 Si può rilanciare in qualsiasi momento, per esempio per aggiornare l'app o se un
 aggiornamento di Nextcloud l'ha disattivata.
+
+### Disinstallazione
+Con lo stesso comando, scegliendo *Disinstalla*, si può:
+1. **rimuovere app e rclone conservando i collegamenti**: reinstallando, ogni utente
+   ritrova il proprio Google Drive già collegato;
+2. **rimuovere tutto**: gli utenti vengono scollegati da Google (l'accesso viene revocato)
+   e si cancellano credenziali OAuth, scelte, registro errori e cartelle di collegamento.
+
+In entrambi i casi i file su Google Drive non vengono toccati, e lo script aspetta che rclone
+abbia finito di inviare eventuali upload in coda. Senza terminale (es. in automatico):
+`... | sudo YES=1 bash -s -- uninstall`, aggiungendo `PURGE=1` per rimuovere tutto.
 
 ## Installazione manuale (una volta sola, sul server)
 
