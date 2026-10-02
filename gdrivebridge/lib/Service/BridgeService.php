@@ -61,6 +61,17 @@ class BridgeService {
 		return $this->config->getAppValue(self::APP, 'previews', 'no') === 'yes';
 	}
 
+	/**
+	 * Come mostrare Documenti/Fogli/Presentazioni Google:
+	 * 'link' (default) collegamenti .link.html che aprono il documento su Google,
+	 * 'skip' nascosti, 'export' convertiti in docx/xlsx/pptx (con rclone serve
+	 * risultano di dimensione 0 e Nextcloud li apre vuoti).
+	 */
+	public function getGdocsMode(): string {
+		$mode = $this->config->getAppValue(self::APP, 'gdocs', 'link');
+		return in_array($mode, ['link', 'skip', 'export'], true) ? $mode : 'link';
+	}
+
 	public function isBridgeDirWritable(): bool {
 		$dir = $this->getBridgeDir();
 		return is_dir($dir) && is_writable($dir);
@@ -185,6 +196,7 @@ class BridgeService {
 
 		$status = $response->getStatusCode();
 		if ($status === 200) {
+			$this->refreshBridgeFile($uid, (string)$response->getBody());
 			return 'ok';
 		}
 		$data = json_decode((string)$response->getBody(), true);
@@ -197,6 +209,26 @@ class BridgeService {
 		}
 		$this->logger->info('Verifica del token Google: risposta ' . $status . ' ' . $error, ['app' => self::APP]);
 		return 'unknown';
+	}
+
+	/**
+	 * Riscrive il file per rclone con il nuovo access token e le impostazioni
+	 * attuali (es. gdocs), così le modifiche valgono senza ricollegarsi.
+	 */
+	private function refreshBridgeFile(string $uid, string $tokenResponse): void {
+		$creds = $this->getDavCredentials($uid);
+		$data = json_decode($tokenResponse, true);
+		$access = is_array($data) ? (string)($data['access_token'] ?? '') : '';
+		if ($creds === null || $access === '') {
+			return;
+		}
+		try {
+			$this->writeBridgeFile($creds['user'], $creds['password'], $this->getClientId($uid),
+				$this->get($uid, 'client_secret', true), $access, $this->get($uid, 'refresh_token', true),
+				gmdate('Y-m-d\TH:i:s\Z', time() + (int)($data['expires_in'] ?? 3600)));
+		} catch (\Throwable $e) {
+			$this->logger->warning('Aggiornamento del file per rclone non riuscito', ['app' => self::APP, 'exception' => $e]);
+		}
 	}
 
 	/* ---------- Flusso OAuth ---------- */
@@ -326,14 +358,24 @@ class BridgeService {
 			'expiry' => $expiry,
 		], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
-		$remote = json_encode([
+		$config = [
 			'type' => 'drive',
 			'_root' => '',
 			'client_id' => $clientId,
 			'client_secret' => $clientSecret,
 			'scope' => 'drive',
 			'token' => $token,
-		], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+		];
+		// rclone vuole solo stringhe nella risposta dell'auth-proxy
+		switch ($this->getGdocsMode()) {
+			case 'link':
+				$config['export_formats'] = 'link.html';
+				break;
+			case 'skip':
+				$config['skip_gdocs'] = 'true';
+				break;
+		}
+		$remote = json_encode($config, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
 		$path = $this->bridgeFile($davUser, $davPass);
 		$tmp = $path . '.tmp';

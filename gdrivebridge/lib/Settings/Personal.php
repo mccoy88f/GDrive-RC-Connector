@@ -37,6 +37,7 @@ class Personal implements ISettings {
 			'bridgeOk' => $this->bridge->isBridgeDirWritable(),
 			'bridgeDir' => $this->bridge->getBridgeDir(),
 			'mountName' => $this->bridge->getMountName(),
+			'gdocsMode' => $this->bridge->getGdocsMode(),
 			'saveUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.saveCredentials'),
 			'startUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.start'),
 			'disconnectUrl' => $this->urlGenerator->linkToRoute('gdrivebridge.oauth.disconnect'),

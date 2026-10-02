@@ -43,6 +43,12 @@
 					<?php endif; ?>
 				</p>
 			<?php endif; ?>
+			<?php if ($_['gdocsMode'] === 'link'): ?>
+				<p class="gdb-hint">
+					Documenti, Fogli e Presentazioni Google compaiono come file <code>.link.html</code>:
+					scaricali o aprili nel browser per modificarli direttamente su Google.
+				</p>
+			<?php endif; ?>
 			<form method="post" action="<?php p($_['disconnectUrl']); ?>">
 				<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
 				<button type="submit" class="button">Scollega Google Drive</button>
