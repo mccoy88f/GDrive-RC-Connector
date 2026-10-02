@@ -9,6 +9,7 @@ use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Files\Events\InvalidateMountCacheEvent;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
+use OCP\IGroupManager;
 use OCP\IURLGenerator;
 use OCP\IUserManager;
 use OCP\Security\ICrypto;
@@ -31,6 +32,8 @@ class BridgeService {
 	private const SCOPE = 'https://www.googleapis.com/auth/drive';
 	private const GDOCS_MODES = ['link', 'skip'];
 	private const MAX_ERRORS = 20;
+	/** Gruppo a cui è applicata l'archiviazione esterna nella modalità mount */
+	public const GROUP_ID = 'gdrive';
 
 	public function __construct(
 		private IConfig $config,
@@ -41,6 +44,7 @@ class BridgeService {
 		private LoggerInterface $logger,
 		private IEventDispatcher $dispatcher,
 		private IUserManager $userManager,
+		private IGroupManager $groupManager,
 	) {
 	}
 
@@ -52,6 +56,15 @@ class BridgeService {
 
 	public function getRcloneHost(): string {
 		return $this->config->getAppValue(self::APP, 'rclone_host', 'rclone-gdrive:8080');
+	}
+
+	/**
+	 * 'webdav': la cartella è montata dall'app tramite il WebDAV di rclone.
+	 * 'mount': rclone monta il Drive come cartella (FUSE) e Nextcloud la vede
+	 * con l'Archiviazione esterna di tipo Locale (configurata da install.sh).
+	 */
+	public function getMode(): string {
+		return $this->config->getAppValue(self::APP, 'mode', 'webdav') === 'mount' ? 'mount' : 'webdav';
 	}
 
 	public function getMountName(): string {
@@ -353,6 +366,7 @@ class BridgeService {
 		$this->set($uid, 'google_email', $email);
 		$this->set($uid, 'dav_user', $davUser);
 		$this->set($uid, 'dav_pass', $davPass, true);
+		$this->addToGroup($uid);
 		$this->invalidateMounts($uid);
 	}
 
@@ -366,6 +380,8 @@ class BridgeService {
 			}
 		}
 		$this->removeBridgeFile($uid);
+		$this->removeMountConfig($uid);
+		$this->removeFromGroup($uid);
 		$this->del($uid, 'refresh_token', 'google_email', 'dav_user', 'dav_pass', 'oauth_state');
 		$this->invalidateMounts($uid);
 	}
@@ -422,13 +438,79 @@ class BridgeService {
 		}
 		$remote = json_encode($config, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
-		$path = $this->bridgeFile($davUser, $davPass);
+		$this->writeFile($this->bridgeFile($davUser, $davPass), $remote);
+
+		// Stessa configurazione in formato rclone.conf, per la modalità mount
+		unset($config['_root']);
+		$ini = "[gdrive]\n";
+		foreach ($config as $key => $value) {
+			$ini .= $key . ' = ' . str_replace(["\r", "\n"], '', $value) . "\n";
+		}
+		$this->writeFile($this->mountConfigFile($uid), $ini);
+	}
+
+	private function writeFile(string $path, string $content): void {
 		$tmp = $path . '.tmp';
-		if (file_put_contents($tmp, $remote) === false) {
+		if (file_put_contents($tmp, $content) === false) {
 			throw new \RuntimeException('Impossibile scrivere il file di collegamento per rclone.');
 		}
 		chmod($tmp, 0600);
 		rename($tmp, $path);
+	}
+
+	/** Configurazione rclone dell'utente per la modalità mount: <cartella>/<uid>.conf */
+	private function mountConfigFile(string $uid): string {
+		return $this->getBridgeDir() . '/' . $uid . '.conf';
+	}
+
+	/** Errori di rclone mount dell'utente, scritti dal container rclone */
+	private function mountErrorsFile(string $uid): string {
+		return $this->getBridgeDir() . '/' . $uid . '.errors';
+	}
+
+	private function removeMountConfig(string $uid): void {
+		foreach ([$this->mountConfigFile($uid), $this->mountErrorsFile($uid)] as $path) {
+			if (is_file($path)) {
+				@unlink($path);
+			}
+		}
+	}
+
+	/* ---------- Gruppo «Google Drive» (modalità mount) ---------- */
+
+	private function addToGroup(string $uid): void {
+		$user = $this->userManager->get($uid);
+		if ($user === null) {
+			return;
+		}
+		$group = $this->groupManager->get(self::GROUP_ID) ?? $this->groupManager->createGroup(self::GROUP_ID);
+		if ($group !== null && !$group->inGroup($user)) {
+			$group->addUser($user);
+		}
+	}
+
+	private function removeFromGroup(string $uid): void {
+		$user = $this->userManager->get($uid);
+		$group = $this->groupManager->get(self::GROUP_ID);
+		if ($user !== null && $group !== null && $group->inGroup($user)) {
+			$group->removeUser($user);
+		}
+	}
+
+	/**
+	 * Riallinea un utente già collegato: file per rclone (entrambi i formati) e
+	 * gruppo. Usato da install.sh, per esempio passando da una modalità all'altra.
+	 */
+	public function syncUser(string $uid): bool {
+		if (!$this->isConnected($uid)) {
+			return false;
+		}
+		$result = $this->fetchToken($uid);
+		// Se Google non dà un access token, rclone lo chiederà da solo con il refresh token
+		$token = ($result !== null && $result[0] === 200) ? $result[1] : ['access_token' => 'scaduto', 'expires_in' => -3600];
+		$ok = $this->refreshBridgeFile($uid, $token);
+		$this->addToGroup($uid);
+		return $ok;
 	}
 
 	private function removeBridgeFile(string $uid): void {
@@ -467,17 +549,74 @@ class BridgeService {
 	/** @return list<array{time: int, message: string, path: string, count: int}> */
 	public function getErrors(string $uid): array {
 		$data = json_decode($this->get($uid, 'errors'), true);
-		return is_array($data) ? array_values($data) : [];
+		$errors = is_array($data) ? array_values($data) : [];
+		$errors = array_merge($errors, $this->getMountErrors($uid));
+		usort($errors, fn (array $a, array $b) => $b['time'] <=> $a['time']);
+		return array_slice($errors, 0, self::MAX_ERRORS);
+	}
+
+	/**
+	 * Errori di rclone mount (modalità mount): righe del log di rclone copiate
+	 * dal container nel file <uid>.errors, es. "2026/10/02 22:15:27 ERROR : a.txt: messaggio".
+	 */
+	private function getMountErrors(string $uid): array {
+		$file = $this->mountErrorsFile($uid);
+		if (!is_file($file)) {
+			return [];
+		}
+		$errors = [];
+		foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+			if (!preg_match('#^(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d) (?:ERROR|CRITICAL) ?: (.*)$#', $line, $m)) {
+				continue;
+			}
+			$path = '';
+			$message = $m[2];
+			if (preg_match('#^(.+?): (.+)$#', $message, $p) && !str_contains($p[1], ' ')) {
+				[$path, $message] = [$p[1], $p[2]];
+			}
+			$time = \DateTime::createFromFormat('Y/m/d H:i:s', $m[1], new \DateTimeZone('UTC'));
+			$time = $time !== false ? $time->getTimestamp() : 0;
+			// Lo stesso errore ripetuto (es. mount ritentato) diventa una riga sola
+			$key = $path . "\0" . $message;
+			if (isset($errors[$key])) {
+				$errors[$key]['count']++;
+				$errors[$key]['time'] = max($errors[$key]['time'], $time);
+				continue;
+			}
+			$errors[$key] = [
+				'time' => $time,
+				'message' => $this->describeText($message),
+				'path' => $path,
+				'count' => 1,
+			];
+		}
+		return array_values($errors);
 	}
 
 	public function clearErrors(string $uid): void {
 		$this->del($uid, 'errors');
+		if (is_file($this->mountErrorsFile($uid))) {
+			@unlink($this->mountErrorsFile($uid));
+		}
 	}
 
 	/** Spiega in italiano gli errori più comuni della cartella Google Drive */
 	public function describeError(\Throwable $e): string {
-		$text = $e->getMessage();
+		$described = $this->describeText($e->getMessage());
+		if ($described !== $e->getMessage()) {
+			return $described;
+		}
+		$class = substr(strrchr('\\' . get_class($e), '\\'), 1);
+		return $class . ': ' . mb_substr($e->getMessage(), 0, 300);
+	}
+
+	/** Aggiunge una spiegazione in italiano ai messaggi di errore noti */
+	private function describeText(string $text): string {
 		$hints = [
+			'invalid_grant' => 'Google ha rifiutato l\'accesso: token scaduto o revocato. Ricollega Google Drive.',
+			'storageQuotaExceeded' => 'Spazio su Google Drive esaurito.',
+			'rateLimitExceeded' => 'Troppe richieste a Google: riprova tra qualche minuto.',
+			'userRateLimitExceeded' => 'Troppe richieste a Google: riprova tra qualche minuto.',
 			'violates local access' => 'Nextcloud ha bloccato la connessione verso rclone (indirizzo interno): aggiorna l\'app.',
 			'401' => 'rclone ha rifiutato le credenziali: apri le impostazioni o ricollega Google Drive.',
 			'Unauthorized' => 'rclone ha rifiutato le credenziali: apri le impostazioni o ricollega Google Drive.',
@@ -494,8 +633,7 @@ class BridgeService {
 				return $hint . ' (' . mb_substr($text, 0, 200) . ')';
 			}
 		}
-		$class = substr(strrchr('\\' . get_class($e), '\\'), 1);
-		return $class . ': ' . mb_substr($text, 0, 300);
+		return mb_substr($text, 0, 300);
 	}
 
 	/* ---------- Messaggi per la pagina impostazioni ---------- */

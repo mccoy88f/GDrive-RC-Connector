@@ -22,6 +22,10 @@ class MountProvider implements IMountProvider {
 	}
 
 	public function getMountsForUser(IUser $user, IStorageFactory $loader): array {
+		// In modalità mount la cartella la crea l'Archiviazione esterna
+		if ($this->bridge->getMode() === 'mount') {
+			return [];
+		}
 		$uid = $user->getUID();
 		$creds = $this->bridge->getDavCredentials($uid);
 		if ($creds === null) {

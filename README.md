@@ -28,6 +28,26 @@ installa e abilita l'app, avvia il container rclone sulla stessa rete e verifica
 Si può rilanciare in qualsiasi momento, per esempio per aggiornare l'app o se un
 aggiornamento di Nextcloud l'ha disattivata.
 
+### Modalità: mount (consigliata) o WebDAV
+Durante l'installazione lo script chiede la modalità:
+
+- **Mount**: rclone monta il Google Drive di ogni utente come cartella (FUSE) e Nextcloud
+  la vede con l'app ufficiale *Archiviazione esterna* (tipo Locale, solo per il gruppo
+  «Google Drive», a cui l'app aggiunge chi si collega). Più robusta: ci si sposta nei video,
+  i file grandi sono gestiti come file locali, gli upload in coda sopravvivono ai riavvii di
+  rclone, nessuna classe interna di Nextcloud. L'Archiviazione esterna la attiva lo script.
+  Serve **una riga nel compose di Nextcloud**, da aggiungere una volta sola (resta anche dopo
+  gli aggiornamenti). In Coolify: risorsa Nextcloud → *Edit Compose File* → nel servizio di
+  Nextcloud, sotto `volumes:`
+  ```yaml
+        - '/data/gdrive-bridge/mnt:/gdrive:rslave'
+  ```
+  poi *Redeploy* e di nuovo lo script. Lo script prepara prima la cartella sull'host e, se la
+  riga manca, mostra queste istruzioni senza modificare nulla.
+- **WebDAV**: l'app monta il WebDAV di rclone. Nessuna modifica a Nextcloud.
+
+Si può passare da una modalità all'altra rilanciando lo script: gli utenti restano collegati.
+
 ### Disinstallazione
 Con lo stesso comando, scegliendo *Disinstalla*, si può:
 1. **rimuovere app e rclone conservando i collegamenti**: reinstallando, ogni utente
