@@ -10,6 +10,7 @@ use OCP\Files\Events\InvalidateMountCacheEvent;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
 use OCP\IGroupManager;
+use OCP\IL10N;
 use OCP\IURLGenerator;
 use OCP\IUserManager;
 use OCP\Security\ICrypto;
@@ -45,6 +46,7 @@ class BridgeService {
 		private IEventDispatcher $dispatcher,
 		private IUserManager $userManager,
 		private IGroupManager $groupManager,
+		private IL10N $l,
 	) {
 	}
 
@@ -142,10 +144,10 @@ class BridgeService {
 		$clientId = trim($clientId);
 		$clientSecret = trim($clientSecret);
 		if ($clientId === '') {
-			throw new \InvalidArgumentException('Il Client ID è obbligatorio.');
+			throw new \InvalidArgumentException($this->l->t('The Client ID is required.'));
 		}
 		if ($clientSecret === '' && !$this->hasClientSecret($uid)) {
-			throw new \InvalidArgumentException('Il Client secret è obbligatorio.');
+			throw new \InvalidArgumentException($this->l->t('The Client secret is required.'));
 		}
 
 		$changed = $clientId !== $this->getClientId($uid)
@@ -207,11 +209,11 @@ class BridgeService {
 		}
 		$error = (string)($data['error'] ?? '');
 		if ($error === 'invalid_grant') {
-			$this->logError($uid, 'Google ha rifiutato l\'accesso: token scaduto o revocato. Ricollega Google Drive.');
+			$this->logError($uid, $this->l->t('Google refused access: token expired or revoked. Reconnect Google Drive.'));
 			return 'expired';
 		}
 		if ($error === 'invalid_client' || $error === 'unauthorized_client') {
-			$this->logError($uid, 'Google non accetta più Client ID o Client secret (' . $error . ').');
+			$this->logError($uid, $this->l->t('Google no longer accepts the Client ID or Client secret (%s).', [$error]));
 			return 'client';
 		}
 		$this->logger->info('Verifica del token Google: risposta ' . $status . ' ' . $error, ['app' => self::APP]);
@@ -261,7 +263,7 @@ class BridgeService {
 				gmdate('Y-m-d\TH:i:s\Z', time() + (int)($token['expires_in'] ?? 3600)));
 		} catch (\Throwable $e) {
 			$this->logger->warning('Aggiornamento del file per rclone non riuscito', ['app' => self::APP, 'exception' => $e]);
-			$this->logError($uid, 'Aggiornamento del collegamento con rclone non riuscito: ' . $e->getMessage());
+			$this->logError($uid, $this->l->t('Updating the rclone link failed: %s', [$e->getMessage()]));
 			return false;
 		}
 		if ($rotate) {
@@ -279,7 +281,7 @@ class BridgeService {
 	 */
 	public function setGdocsMode(string $uid, string $mode): bool {
 		if (!in_array($mode, self::GDOCS_MODES, true)) {
-			throw new \InvalidArgumentException('Scelta non valida.');
+			throw new \InvalidArgumentException($this->l->t('Invalid choice.'));
 		}
 		$this->set($uid, 'gdocs', $mode);
 		if (!$this->isConnected($uid)) {
@@ -293,7 +295,7 @@ class BridgeService {
 
 	public function buildAuthUrl(string $uid): string {
 		if (!$this->hasClientCredentials($uid)) {
-			throw new \RuntimeException('Inserisci prima Client ID e Client secret.');
+			throw new \RuntimeException($this->l->t('Enter the Client ID and Client secret first.'));
 		}
 		$state = $this->random->generate(32, ISecureRandom::CHAR_ALPHANUMERIC);
 		$this->set($uid, 'oauth_state', $state);
@@ -313,10 +315,10 @@ class BridgeService {
 		$expected = $this->get($uid, 'oauth_state');
 		$this->del($uid, 'oauth_state');
 		if ($expected === '' || !hash_equals($expected, $state)) {
-			throw new \RuntimeException('Richiesta di autorizzazione non valida o scaduta: riprova.');
+			throw new \RuntimeException($this->l->t('Invalid or expired authorization request: please try again.'));
 		}
 		if ($code === '') {
-			throw new \RuntimeException('Google non ha restituito il codice di autorizzazione.');
+			throw new \RuntimeException($this->l->t('Google did not return the authorization code.'));
 		}
 
 		$clientId = $this->getClientId($uid);
@@ -336,13 +338,13 @@ class BridgeService {
 			$data = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 		} catch (\Throwable $e) {
 			$this->logger->error('Scambio del codice OAuth fallito', ['app' => self::APP, 'exception' => $e]);
-			throw new \RuntimeException('Google ha rifiutato lo scambio del codice: controlla Client ID, Client secret e URI di reindirizzamento.');
+			throw new \RuntimeException($this->l->t('Google refused the code exchange: check the Client ID, Client secret and redirect URI.'));
 		}
 
 		$access = (string)($data['access_token'] ?? '');
 		$refresh = (string)($data['refresh_token'] ?? '');
 		if ($access === '' || $refresh === '') {
-			throw new \RuntimeException('Google non ha restituito un refresh token. Rimuovi l\'accesso dell\'app dal tuo account Google e riprova.');
+			throw new \RuntimeException($this->l->t('Google did not return a refresh token. Remove the app\'s access from your Google account and try again.'));
 		}
 		$expiry = gmdate('Y-m-d\TH:i:s\Z', time() + (int)($data['expires_in'] ?? 3600));
 
@@ -406,10 +408,7 @@ class BridgeService {
 	private function writeBridgeFile(string $uid, string $davUser, string $davPass, string $clientId, string $clientSecret,
 		string $access, string $refresh, string $expiry): void {
 		if (!$this->isBridgeDirWritable()) {
-			throw new \RuntimeException(sprintf(
-				'La cartella %s non esiste o non è scrivibile da Nextcloud: controlla il volume condiviso con rclone.',
-				$this->getBridgeDir()
-			));
+			throw new \RuntimeException($this->l->t('The folder %s does not exist or is not writable by Nextcloud: check the volume shared with rclone.', [$this->getBridgeDir()]));
 		}
 
 		$token = json_encode([
@@ -452,7 +451,7 @@ class BridgeService {
 	private function writeFile(string $path, string $content): void {
 		$tmp = $path . '.tmp';
 		if (file_put_contents($tmp, $content) === false) {
-			throw new \RuntimeException('Impossibile scrivere il file di collegamento per rclone.');
+			throw new \RuntimeException($this->l->t('Could not write the link file for rclone.'));
 		}
 		chmod($tmp, 0600);
 		rename($tmp, $path);
@@ -610,23 +609,23 @@ class BridgeService {
 		return $class . ': ' . mb_substr($e->getMessage(), 0, 300);
 	}
 
-	/** Aggiunge una spiegazione in italiano ai messaggi di errore noti */
+	/** Aggiunge una spiegazione (tradotta) ai messaggi di errore noti */
 	private function describeText(string $text): string {
 		$hints = [
-			'invalid_grant' => 'Google ha rifiutato l\'accesso: token scaduto o revocato. Ricollega Google Drive.',
-			'storageQuotaExceeded' => 'Spazio su Google Drive esaurito.',
-			'rateLimitExceeded' => 'Troppe richieste a Google: riprova tra qualche minuto.',
-			'userRateLimitExceeded' => 'Troppe richieste a Google: riprova tra qualche minuto.',
-			'violates local access' => 'Nextcloud ha bloccato la connessione verso rclone (indirizzo interno): aggiorna l\'app.',
-			'401' => 'rclone ha rifiutato le credenziali: apri le impostazioni o ricollega Google Drive.',
-			'Unauthorized' => 'rclone ha rifiutato le credenziali: apri le impostazioni o ricollega Google Drive.',
-			'cURL error 28' => 'Tempo scaduto: Google o rclone non hanno risposto in tempo.',
-			'timed out' => 'Tempo scaduto: Google o rclone non hanno risposto in tempo.',
-			'cURL error 6' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
-			'Could not resolve host' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
-			'Failed to connect' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
-			'cURL error 7' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
-			'Connection refused' => 'rclone non raggiungibile: il container gdrive-rclone è attivo?',
+			'invalid_grant' => $this->l->t('Google refused access: token expired or revoked. Reconnect Google Drive.'),
+			'storageQuotaExceeded' => $this->l->t('Google Drive storage is full.'),
+			'rateLimitExceeded' => $this->l->t('Too many requests to Google: try again in a few minutes.'),
+			'userRateLimitExceeded' => $this->l->t('Too many requests to Google: try again in a few minutes.'),
+			'violates local access' => $this->l->t('Nextcloud blocked the connection to rclone (internal address): update the app.'),
+			'401' => $this->l->t('rclone rejected the credentials: open the settings or reconnect Google Drive.'),
+			'Unauthorized' => $this->l->t('rclone rejected the credentials: open the settings or reconnect Google Drive.'),
+			'cURL error 28' => $this->l->t('Timed out: Google or rclone did not answer in time.'),
+			'timed out' => $this->l->t('Timed out: Google or rclone did not answer in time.'),
+			'cURL error 6' => $this->l->t('rclone is not reachable: is the gdrive-rclone container running?'),
+			'Could not resolve host' => $this->l->t('rclone is not reachable: is the gdrive-rclone container running?'),
+			'Failed to connect' => $this->l->t('rclone is not reachable: is the gdrive-rclone container running?'),
+			'cURL error 7' => $this->l->t('rclone is not reachable: is the gdrive-rclone container running?'),
+			'Connection refused' => $this->l->t('rclone is not reachable: is the gdrive-rclone container running?'),
 		];
 		foreach ($hints as $needle => $hint) {
 			if (stripos($text, (string)$needle) !== false) {

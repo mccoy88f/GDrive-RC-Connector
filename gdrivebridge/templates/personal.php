@@ -1,11 +1,12 @@
 <?php
 /** @var array $_ */
+/** @var \OCP\IL10N $l */
 ?>
 <div id="gdrivebridge" class="section">
 	<h2>Google Drive</h2>
 	<p class="settings-hint">
-		Collega il tuo Google Drive: comparirà nei File come cartella «<?php p($_['mountName']); ?>».
-		Usi le credenziali OAuth del tuo progetto Google, nessun altro ha accesso al tuo Drive.
+		<?php p($l->t('Connect your Google Drive: it will appear in Files as the folder “%s”.', [$_['mountName']])); ?>
+		<?php p($l->t('You use the OAuth credentials of your own Google project: nobody else has access to your Drive.')); ?>
 	</p>
 
 	<?php if (!empty($_['flash'])): ?>
@@ -16,8 +17,7 @@
 
 	<?php if (!$_['bridgeOk']): ?>
 		<p class="gdb-msg gdb-error">
-			La cartella di collegamento <code><?php p($_['bridgeDir']); ?></code> non è accessibile dal server.
-			Va montato il volume condiviso con il container rclone (vedi README).
+			<?php p($l->t('The link folder %s is not accessible from the server: the volume shared with the rclone container must be mounted (see README).', [$_['bridgeDir']])); ?>
 		</p>
 	<?php endif; ?>
 
@@ -25,68 +25,67 @@
 		<div class="gdb-box">
 			<?php if ($_['tokenStatus'] === 'expired'): ?>
 				<p class="gdb-msg gdb-error">
-					<strong>Accesso a Google scaduto o revocato</strong><?php if ($_['email'] !== ''): ?> per l'account <?php p($_['email']); ?><?php endif; ?>:
-					la cartella «<?php p($_['mountName']); ?>» non funziona finché non ricolleghi.
-					Se succede ogni 7 giorni, l'app su Google Cloud è ancora in "Test": pubblicala (vedi guida sotto).
+					<strong><?php p($l->t('Google access expired or revoked')); ?></strong><?php if ($_['email'] !== ''): ?> (<?php p($l->t('account %s', [$_['email']])); ?>)<?php endif; ?>.
+					<?php p($l->t('The folder “%s” will not work until you reconnect. If this happens every 7 days, your app on Google Cloud is still in “Testing”: publish it (see the guide below).', [$_['mountName']])); ?>
 				</p>
-				<p><a class="button primary" href="<?php p($_['startUrl']); ?>">Ricollega Google Drive</a></p>
+				<p><a class="button primary" href="<?php p($_['startUrl']); ?>"><?php p($l->t('Reconnect Google Drive')); ?></a></p>
 			<?php elseif ($_['tokenStatus'] === 'client'): ?>
 				<p class="gdb-msg gdb-error">
-					<strong>Google non accetta più Client ID o Client secret</strong> (client eliminato o secret rigenerato?):
-					aggiorna le credenziali qui sotto e ricollega.
+					<strong><?php p($l->t('Google no longer accepts the Client ID or Client secret')); ?></strong>
+					<?php p($l->t('(client deleted or secret regenerated?): update the credentials below and reconnect.')); ?>
 				</p>
 			<?php else: ?>
 				<p>
-					<strong>Collegato</strong><?php if ($_['email'] !== ''): ?> all'account <?php p($_['email']); ?><?php endif; ?>.
+					<?php if ($_['email'] !== ''): ?>
+						<strong><?php p($l->t('Connected')); ?></strong> <?php p($l->t('to the account %s.', [$_['email']])); ?>
+					<?php else: ?>
+						<strong><?php p($l->t('Connected')); ?></strong>.
+					<?php endif; ?>
 					<?php if ($_['tokenStatus'] === 'unknown'): ?>
-						<span class="gdb-hint">(al momento non è possibile verificare l'accesso con Google)</span>
+						<span class="gdb-hint"><?php p($l->t('(Google access cannot be verified right now)')); ?></span>
 					<?php endif; ?>
 				</p>
 			<?php endif; ?>
 			<form method="post" action="<?php p($_['disconnectUrl']); ?>">
 				<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
-				<button type="submit" class="button">Scollega Google Drive</button>
+				<button type="submit" class="button"><?php p($l->t('Disconnect Google Drive')); ?></button>
 			</form>
 		</div>
 	<?php elseif ($_['hasCredentials']): ?>
 		<div class="gdb-box">
-			<p>Credenziali salvate. Ora autorizza l'accesso al tuo Drive.</p>
-			<a class="button primary" href="<?php p($_['startUrl']); ?>">Collega Google Drive</a>
+			<p><?php p($l->t('Credentials saved. Now authorize access to your Drive.')); ?></p>
+			<a class="button primary" href="<?php p($_['startUrl']); ?>"><?php p($l->t('Connect Google Drive')); ?></a>
 		</div>
 	<?php endif; ?>
 
-	<h3>Documenti, Fogli e Presentazioni Google</h3>
+	<h3><?php p($l->t('Google Docs, Sheets and Slides')); ?></h3>
 	<p class="settings-hint">
-		I documenti creati con Google Docs, Fogli e Presentazioni non sono file veri e propri: esistono solo su Google.
-		Per mostrarli come <code>.docx</code>/<code>.xlsx</code>/<code>.pptx</code> andrebbero convertiti, ma Google non
-		dice quanto pesa la conversione finché non la si scarica tutta, quindi in Nextcloud risulterebbero vuoti.
-		I file normali caricati su Drive (PDF, Word, Excel, foto…) non hanno questo problema.
+		<?php p($l->t('Documents created with Google Docs, Sheets and Slides are not real files: they only exist on Google. To show them as .docx/.xlsx/.pptx they would have to be converted, but Google does not tell how big the conversion is until it has been fully downloaded, so in Nextcloud they would appear empty. Regular files uploaded to Drive (PDF, Word, Excel, photos…) do not have this problem.')); ?>
 	</p>
 	<form method="post" action="<?php p($_['gdocsUrl']); ?>" class="gdb-form">
 		<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
 		<label class="gdb-radio">
 			<input type="radio" name="gdocs" value="link"<?php if ($_['gdocsMode'] === 'link'): ?> checked<?php endif; ?>>
-			<span><strong>Mostrali come collegamenti</strong> (<code>Nome.link.html</code>): scaricandoli o aprendoli
-				nel browser si apre il documento su Google, dove puoi modificarlo.</span>
+			<span><strong><?php p($l->t('Show them as links')); ?></strong> (<code><?php p($l->t('Name')); ?>.link.html</code>):
+				<?php p($l->t('downloading or opening them in the browser opens the document on Google, where you can edit it.')); ?></span>
 		</label>
 		<label class="gdb-radio">
 			<input type="radio" name="gdocs" value="skip"<?php if ($_['gdocsMode'] === 'skip'): ?> checked<?php endif; ?>>
-			<span><strong>Nascondili</strong>: nella cartella compaiono solo i file normali.
-				I documenti restano su Google Drive, non vengono cancellati.</span>
+			<span><strong><?php p($l->t('Hide them')); ?></strong>:
+				<?php p($l->t('only regular files appear in the folder. The documents stay on Google Drive and are not deleted.')); ?></span>
 		</label>
-		<div><button type="submit" class="button">Salva scelta</button></div>
+		<div><button type="submit" class="button"><?php p($l->t('Save choice')); ?></button></div>
 	</form>
 
-	<h3>Registro errori</h3>
+	<h3><?php p($l->t('Error log')); ?></h3>
 	<?php if (empty($_['errors'])): ?>
-		<p class="settings-hint">Nessun errore registrato.</p>
+		<p class="settings-hint"><?php p($l->t('No errors recorded.')); ?></p>
 	<?php else: ?>
 		<p class="settings-hint">
-			Gli ultimi problemi della cartella «<?php p($_['mountName']); ?>», dal più recente.
-			Se un errore si ripete, il numero tra parentesi indica quante volte.
+			<?php p($l->t('The latest problems of the folder “%s”, most recent first. If an error repeats, the number in brackets says how many times.', [$_['mountName']])); ?>
 		</p>
 		<table class="gdb-errors">
-			<thead><tr><th>Quando</th><th>File</th><th>Errore</th></tr></thead>
+			<thead><tr><th><?php p($l->t('When')); ?></th><th><?php p($l->t('File')); ?></th><th><?php p($l->t('Error')); ?></th></tr></thead>
 			<tbody>
 			<?php foreach ($_['errors'] as $e): ?>
 				<tr>
@@ -99,11 +98,11 @@
 		</table>
 		<form method="post" action="<?php p($_['clearErrorsUrl']); ?>">
 			<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
-			<button type="submit" class="button">Svuota registro</button>
+			<button type="submit" class="button"><?php p($l->t('Clear log')); ?></button>
 		</form>
 	<?php endif; ?>
 
-	<h3>Credenziali OAuth del tuo progetto Google</h3>
+	<h3><?php p($l->t('OAuth credentials of your Google project')); ?></h3>
 	<form method="post" action="<?php p($_['saveUrl']); ?>" class="gdb-form">
 		<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']); ?>">
 
@@ -113,26 +112,23 @@
 
 		<label for="gdb-client-secret">Client secret</label>
 		<input id="gdb-client-secret" name="client_secret" type="password" autocomplete="new-password"
-			placeholder="<?php p($_['hasSecret'] ? '•••••••• salvato (lascia vuoto per non cambiarlo)' : ''); ?>">
+			placeholder="<?php p($_['hasSecret'] ? $l->t('•••••••• saved (leave empty to keep it)') : ''); ?>">
 
-		<div><button type="submit" class="button">Salva credenziali</button></div>
+		<div><button type="submit" class="button"><?php p($l->t('Save credentials')); ?></button></div>
 	</form>
 
 	<details class="gdb-guide"<?php if (!$_['hasCredentials']): ?> open<?php endif; ?>>
-		<summary>Come creare le credenziali su Google Cloud</summary>
+		<summary><?php p($l->t('How to create the credentials on Google Cloud')); ?></summary>
 		<ol>
-			<li>Vai su <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">console.cloud.google.com</a> e crea un nuovo progetto.</li>
-			<li>In <em>API e servizi → Libreria</em> cerca <strong>Google Drive API</strong> e attivala.</li>
-			<li>Configura la <strong>schermata di consenso OAuth</strong>: tipo <em>Esterno</em>, nome app a piacere, la tua email.</li>
-			<li><strong>Importante:</strong> nella sezione <em>Pubblico</em> premi <em>Pubblica app</em> (stato "In produzione").
-				Se resta in "Test", Google fa scadere l'accesso ogni 7 giorni.</li>
-			<li>In <em>Client</em> crea un nuovo <strong>ID client OAuth</strong> di tipo <em>Applicazione web</em> e, in
-				<em>URI di reindirizzamento autorizzati</em>, inserisci esattamente questo indirizzo:
+			<li><?php print_unescaped($l->t('Go to %s and create a new project.', ['<a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">console.cloud.google.com</a>'])); ?></li>
+			<li><?php print_unescaped($l->t('In <em>APIs &amp; Services → Library</em> search for <strong>Google Drive API</strong> and enable it.')); ?></li>
+			<li><?php print_unescaped($l->t('Configure the <strong>OAuth consent screen</strong>: type <em>External</em>, any app name, your email.')); ?></li>
+			<li><?php print_unescaped($l->t('<strong>Important:</strong> in the <em>Audience</em> section press <em>Publish app</em> (status “In production”). If it stays in “Testing”, Google expires the access every 7 days.')); ?></li>
+			<li><?php print_unescaped($l->t('In <em>Clients</em> create a new <strong>OAuth client ID</strong> of type <em>Web application</em> and, under <em>Authorized redirect URIs</em>, enter exactly this address:')); ?>
 				<input class="gdb-redirect" type="text" readonly value="<?php p($_['redirectUri']); ?>">
 			</li>
-			<li>Copia <em>Client ID</em> e <em>Client secret</em> nel modulo qui sopra, salva e premi <em>Collega Google Drive</em>.</li>
-			<li>Google ti avviserà che l'app non è verificata: è normale, è la tua app.
-				Premi <em>Avanzate</em> → <em>Vai a … (non sicura)</em> e consenti l'accesso.</li>
+			<li><?php print_unescaped($l->t('Copy the <em>Client ID</em> and <em>Client secret</em> into the form above, save and press <em>Connect Google Drive</em>.')); ?></li>
+			<li><?php print_unescaped($l->t('Google will warn you that the app is not verified: that is expected, it is your own app. Press <em>Advanced</em> → <em>Go to … (unsafe)</em> and allow access.')); ?></li>
 		</ol>
 	</details>
 </div>

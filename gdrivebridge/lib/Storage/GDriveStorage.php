@@ -9,6 +9,8 @@ use OCA\GDriveBridge\Service\BridgeService;
 use OCP\Files\StorageInvalidException;
 use OCP\Files\StorageNotAvailableException;
 use OCP\IConfig;
+use OCP\IL10N;
+use OCP\L10N\IFactory;
 use OCP\Server;
 
 /**
@@ -48,6 +50,10 @@ class GDriveStorage extends DAV {
 		return (int)Server::get(IConfig::class)->getAppValue('gdrivebridge', 'upload_timeout', '3600');
 	}
 
+	private function l10n(): IL10N {
+		return Server::get(IFactory::class)->get('gdrivebridge');
+	}
+
 	private function recordError(\Throwable $e, string $path): void {
 		try {
 			$bridge = Server::get(BridgeService::class);
@@ -74,8 +80,8 @@ class GDriveStorage extends DAV {
 
 		$stream = @fopen($this->url($path), 'rb', false, $context);
 		if ($stream === false) {
-			$error = error_get_last()['message'] ?? 'connessione non riuscita';
-			$e = new StorageNotAvailableException('Download da rclone non riuscito: ' . $error);
+			$error = error_get_last()['message'] ?? 'connection failed';
+			$e = new StorageNotAvailableException($this->l10n()->t('Download from rclone failed: %s', [$error]));
 			$this->recordError($e, $path);
 			throw $e;
 		}
@@ -95,7 +101,7 @@ class GDriveStorage extends DAV {
 		if ($status === 404) {
 			return false;
 		}
-		$e = new StorageNotAvailableException('rclone ha risposto ' . $status . ' al download');
+		$e = new StorageNotAvailableException($this->l10n()->t('rclone answered %s to the download', [$status]));
 		$this->recordError($e, $path);
 		throw $e;
 	}

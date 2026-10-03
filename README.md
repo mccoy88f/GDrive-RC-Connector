@@ -1,146 +1,113 @@
-# Google Drive Bridge per Nextcloud
+# Google Drive Bridge for Nextcloud
 
-Ogni utente collega il **proprio** Google Drive usando le credenziali OAuth del
-**proprio** progetto Google. Il Drive compare nei File come cartella «Google Drive».
+*[Italiano](README.it.md)*
+
+Each user connects **their own** Google Drive using the OAuth credentials of **their own**
+Google project. The Drive shows up in Files as the folder “Google Drive”.
 
 ```
-Browser ──login Google──▶ Nextcloud (app gdrivebridge)
-                              │ scrive /gdrive-bridge/<hash>.json (token dell'utente)
-                              │ monta WebDAV con credenziali casuali per utente
-                              ▼
-                     rclone serve webdav --auth-proxy ──▶ Google Drive dell'utente
+Browser ──Google login──▶ Nextcloud (gdrivebridge app) ── writes the user's rclone config
+                                                            │
+                          ┌─────────────────────────────────┴─────────────────────────┐
+             mount mode:  rclone mounts the Drive as a folder (FUSE) ─▶ External storage
+            webdav mode:  rclone serve webdav ─▶ folder mounted by the app
+                                                            │
+                                                            ▼
+                                                  the user's Google Drive
 ```
 
-## Installazione automatica (consigliata)
+## Install, update, uninstall
 
-Dal **terminale del server** (in Coolify: *Servers → il tuo server → Terminal*),
-non dal terminale del container Nextcloud:
+From the **server terminal** (in Coolify: *Servers → your server → Terminal*), not from the
+Nextcloud container terminal:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash -s -- install
 ```
-Lo script non fa domande: cosa fare si indica alla fine del comando.
+The script asks no questions: what to do goes at the end of the command.
 
-| Fine del comando | Cosa fa |
+| End of the command | What it does |
 |---|---|
-| `install` | installa o aggiorna; modalità mount se Nextcloud ha già il volume `/gdrive`, altrimenti webdav |
-| `install mount` | installa o aggiorna in modalità mount (consigliata) |
-| `install webdav` | installa o aggiorna in modalità webdav |
-| `uninstall` | rimuove app e rclone, conserva i collegamenti degli utenti |
-| `uninstall purge` | rimuove tutto, compresi collegamenti e credenziali degli utenti |
+| `install` | install or update; mount mode if Nextcloud already has the `/gdrive` volume, otherwise webdav |
+| `install mount` | install or update in mount mode (recommended) |
+| `install webdav` | install or update in webdav mode |
+| `uninstall` | remove the app and rclone, keep the users' connections |
+| `uninstall purge` | remove everything, including the users' connections and credentials |
 
-Se sul server ci sono più container Nextcloud aggiungi il nome: `... | sudo bash -s -- install NOME_CONTAINER`.
+Options that can be added: `en` / `it` (language of the messages, default: system language,
+otherwise English) and the name of the Nextcloud container if the server has more than one,
+e.g. `... | sudo bash -s -- install mount it`.
 
-Lo script trova il container Nextcloud, crea la cartella condivisa dentro la
-cartella dati di Nextcloud (già persistente, quindi senza volumi da aggiungere),
-installa e abilita l'app, avvia il container rclone sulla stessa rete e verifica il collegamento.
-Si può rilanciare in qualsiasi momento, per esempio per aggiornare l'app o se un
-aggiornamento di Nextcloud l'ha disattivata.
+The script finds the Nextcloud container (official or linuxserver image), creates the shared
+folder inside the Nextcloud data folder (already persistent), installs and enables the app,
+starts the rclone container and checks the connection. Run it again at any time, for example
+to update the app or after a Nextcloud update. Users stay connected.
 
-### Modalità: mount (consigliata) o WebDAV
-Le modalità sono due:
+### Modes
 
-- **Mount**: rclone monta il Google Drive di ogni utente come cartella (FUSE) e Nextcloud
-  la vede con l'app ufficiale *Archiviazione esterna* (tipo Locale, solo per il gruppo
-  «Google Drive», a cui l'app aggiunge chi si collega). Più robusta: ci si sposta nei video,
-  i file grandi sono gestiti come file locali, gli upload in coda sopravvivono ai riavvii di
-  rclone, nessuna classe interna di Nextcloud. L'Archiviazione esterna la attiva lo script.
-  Serve **una riga nel compose di Nextcloud**, da aggiungere una volta sola (resta anche dopo
-  gli aggiornamenti). In Coolify: risorsa Nextcloud → *Edit Compose File* → nel servizio di
-  Nextcloud, sotto `volumes:`
+- **Mount (recommended)**: rclone mounts each user's Google Drive as a folder (FUSE) and
+  Nextcloud shows it through the official *External storage* app (Local type, only for the
+  “Google Drive” group, which the app adds connected users to). Files behave like local
+  files: seeking in videos works, large files are streamed, queued uploads survive rclone
+  restarts. The script enables External storage by itself.
+  It needs **one line in the Nextcloud compose**, added once (it stays after updates).
+  Run `install mount` first: it prepares the host folder and, if the line is missing, shows
+  it and meanwhile installs in webdav mode. Then in Coolify: Nextcloud resource →
+  *Edit Compose File* → in the **`nextcloud`** service (not the database), under `volumes:`
   ```yaml
         - '/data/gdrive-bridge/mnt:/gdrive:rslave'
   ```
-  poi *Redeploy* e di nuovo lo script con `install mount`. Lo script prepara prima la cartella sull'host e, se la
-  riga manca, mostra queste istruzioni senza modificare nulla.
-- **WebDAV**: l'app monta il WebDAV di rclone. Nessuna modifica a Nextcloud.
+  save, *Restart* the resource and run `install mount` again.
+- **WebDAV**: the app mounts rclone's WebDAV. No change to Nextcloud.
 
-Si può passare da una modalità all'altra rilanciando lo script: gli utenti restano collegati.
+### Uninstall
+- `uninstall`: removes the app and rclone, keeps the connections: after reinstalling, every
+  user finds their Google Drive already connected.
+- `uninstall purge`: disconnects users from Google (access is revoked) and deletes OAuth
+  credentials, choices, error log and link folders. In mount mode, first remove the
+  `/gdrive` line from the Nextcloud compose: the script tells you if it is still there.
 
-### Disinstallazione
-Con lo stesso comando si può:
-1. **`uninstall`: rimuovere app e rclone conservando i collegamenti**: reinstallando, ogni utente
-   ritrova il proprio Google Drive già collegato;
-2. **`uninstall purge`: rimuovere tutto**: gli utenti vengono scollegati da Google (l'accesso viene revocato)
-   e si cancellano credenziali OAuth, scelte, registro errori e cartelle di collegamento.
+In both cases the files on Google Drive are not touched, and the script waits for rclone to
+finish sending any queued upload.
 
-In entrambi i casi i file su Google Drive non vengono toccati, e lo script aspetta che rclone
-abbia finito di inviare eventuali upload in coda.
+## Usage (each user)
+Personal settings → **Google Drive**: the page has the guide to create the OAuth client on
+Google Cloud and shows the redirect URI to copy. On the same page:
+- **Google Docs, Sheets and Slides**: they are not real files and through rclone they would
+  appear empty, so they are shown as `.link.html` links that open the document on Google,
+  or hidden;
+- **Error log**: the latest problems of the folder (rclone unreachable, expired token,
+  failed downloads…), explained, with repeated errors grouped;
+- the check that the Google login is still valid every time the page is opened.
 
-## Installazione manuale (una volta sola, sul server)
+The app is in English with an Italian translation: everyone sees it in the language of
+their Nextcloud profile.
 
-### 1. Cartelle condivise sull'host
-Copia `server/setup-bridge.sh` sul server e lancialo:
+## Options
+Run from the server (with the linuxserver image use `-u 1000` or the right user and
+`/app/www/public/occ`):
 ```bash
-sudo bash setup-bridge.sh NOME_CONTAINER_NEXTCLOUD
+occ config:app:set gdrivebridge previews --value=yes   # previews in the folder (off by default: each one
+                                                       # downloads the whole file from Google)
+occ config:app:set gdrivebridge gdocs --value=skip     # default choice for Google Docs: link or skip
+occ config:app:set gdrivebridge mount_name --value="Google Drive"   # folder name
+occ config:app:set gdrivebridge upload_timeout --value=3600         # webdav mode: max seconds per upload to rclone
 ```
-Crea `/data/gdrive-bridge/users` (scrivibile solo da Nextcloud) e
-`/data/gdrive-bridge/proxy/auth-proxy.sh`.
+After changing `previews` or `mount_name`, run the script again so it applies them.
 
-### 2. Container rclone (Coolify)
-Sostituisci il compose della risorsa rclone con `server/docker-compose.rclone.yml`.
-Lascia attiva la rete predefinita di Coolify e fai il deploy.
-Non serve più nessun `rclone.conf`.
+## Large files
+- **Download**: the file reaches the user while it comes down from Google, with no waiting
+  and no duration limit.
+- **Upload**: rclone puts the file in its cache and sends it to Google right after, in the
+  background: in Nextcloud the upload is complete before the file is really on Google.
+  Disk space needed: about twice the file size (Nextcloud temporary files and rclone cache).
+- **Do not restart rclone while it is uploading** in webdav mode: queued files would be lost
+  (in mount mode they resume). The script waits by itself. To see what is being sent:
+  `docker logs -f gdrive-rclone`.
 
-### 3. Volume in Nextcloud (Coolify)
-Nella risorsa Nextcloud aggiungi uno storage persistente di tipo bind:
-- sorgente sull'host: `/data/gdrive-bridge/users`
-- destinazione nel container: `/gdrive-bridge`
-
-Poi Redeploy.
-
-### 4. Installa l'app
-```bash
-docker cp gdrivebridge NOME_CONTAINER_NEXTCLOUD:/var/www/html/custom_apps/
-docker exec NOME_CONTAINER_NEXTCLOUD chown -R www-data:www-data /var/www/html/custom_apps/gdrivebridge
-docker exec -u www-data NOME_CONTAINER_NEXTCLOUD php occ app:enable gdrivebridge
-```
-(Con l'immagine linuxserver il percorso è diverso, di solito `/config/www/nextcloud/custom_apps`
-oppure `/app/www/public/custom_apps`, e l'utente è `abc`.)
-
-### 5. Indirizzo del container rclone
-```bash
-docker ps --format '{{.Names}}' | grep rclone
-docker exec -u www-data NOME_CONTAINER_NEXTCLOUD php occ config:app:set gdrivebridge rclone_host --value=NOME_CONTAINER_RCLONE:8080
-```
-
-### Opzioni (facoltative)
-```bash
-occ config:app:set gdrivebridge mount_name --value="Google Drive"   # nome della cartella
-occ config:app:set gdrivebridge bridge_dir --value=/gdrive-bridge     # cartella condivisa
-occ config:app:set gdrivebridge previews --value=yes                # anteprime nella cartella (spente di default:
-                                                                    # ognuna scarica il file intero da Google)
-occ config:app:set gdrivebridge gdocs --value=skip                   # scelta predefinita per Documenti/Fogli Google:
-                                                                    # link (default, file .link.html che aprono il
-                                                                    # documento su Google) o skip (nascosti)
-```
-Ogni utente può comunque cambiare la scelta per i documenti Google nelle proprie
-impostazioni, dove trova anche il **registro errori** della cartella Google Drive.
-
-## Uso (ogni utente)
-Impostazioni personali → **Google Drive**: la pagina contiene la guida per creare il
-client OAuth su Google Cloud e mostra l'URI di reindirizzamento da copiare.
-
-## File grandi
-- **Download**: il file arriva all'utente mentre scende da Google (nessuna attesa iniziale,
-  nessun limite di durata). Si interrompe solo se Google/rclone restano fermi per 120 secondi.
-- **Upload**: Nextcloud consegna il file a rclone, che lo mette nella sua cache e lo invia a
-  Google subito dopo, in background. Il caricamento risulta quindi completato in Nextcloud
-  prima che il file sia davvero su Google: per i file molto grandi può servire qualche minuto.
-  Serve spazio su disco per circa due volte la dimensione del file (temporanei di Nextcloud
-  e cache di rclone). Limite di tempo per la consegna a rclone: 1 ora
-  (`occ config:app:set gdrivebridge upload_timeout --value=SECONDI`).
-- **Non riavviare rclone mentre carica** (`docker restart gdrive-rclone`): i file ancora in coda
-  andrebbero persi. Lo script di installazione aspetta da solo che gli invii finiscano.
-  Per vedere se ci sono invii in corso: `docker logs -f gdrive-rclone`.
-- **Video**: si possono guardare, ma ogni spostamento nella riproduzione riparte a scaricare
-  dal file da Google, quindi con video lunghi è lento.
-
-## Problemi comuni
-- **L'URI di reindirizzamento inizia con `http://`** anche se usi HTTPS: in `config.php`
-  aggiungi `'overwriteprotocol' => 'https',`.
-- **La cartella non compare o dà errore**: verifica che Nextcloud raggiunga rclone
-  (`curl http://NOME_CONTAINER_RCLONE:8080` dal container Nextcloud deve dare 401)
-  e guarda i log del container rclone.
-- **L'accesso scade dopo 7 giorni**: l'app Google è rimasta in modalità "Test",
-  va pubblicata ("In produzione").
-- Se hai configurato prima un'archiviazione esterna WebDAV verso rclone, rimuovila.
+## Troubleshooting
+- **The redirect URI starts with `http://`** although you use HTTPS: in `config.php` add
+  `'overwriteprotocol' => 'https',`.
+- **The folder does not appear or shows an error**: look at the error log in the user's
+  settings and at `docker logs gdrive-rclone`.
+- **Access expires after 7 days**: the Google app is still in “Testing”, publish it
+  (“In production”), then reconnect once.
