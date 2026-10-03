@@ -112,3 +112,18 @@ Dopo aver cambiato `previews` o `mount_name`, rilancia lo script perché le appl
   dell'utente e `docker logs gdrive-rclone`.
 - **L'accesso scade dopo 7 giorni**: l'app Google è rimasta in "Test", pubblicala
   ("In produzione") e ricollegati una volta.
+
+## Licenza e contributi
+Il progetto è rilasciato con licenza **[CC BY-NC 4.0](LICENSE)** (Creative Commons
+Attribuzione-Non commerciale 4.0):
+- ✅ uso, condivisione e modifica liberi e gratuiti per scopi **non commerciali**;
+- ✅ i fork sono benvenuti, a patto di **citare il progetto originale**
+  (link a https://github.com/mccoy88f/gdrive-rc-connector) e indicare cosa hai cambiato;
+- ❌ niente uso commerciale senza il permesso dell'autore.
+
+Il software su cui si appoggia mantiene **le proprie licenze, da rispettare anch'esse**:
+rclone (MIT), Nextcloud (AGPL v3) e i termini delle API di Google. Dettagli in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+**I miglioramenti sono benvenuti!** Apri una issue per bug e idee, o una pull request con
+le tue modifiche.

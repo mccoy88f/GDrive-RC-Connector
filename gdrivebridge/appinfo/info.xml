@@ -8,7 +8,7 @@
     <description>Each user enters the OAuth client of their own Google project, signs in and finds Google Drive as a folder in Files. The files go through an rclone container, either mounted as a folder and shown with External storage (mount mode) or served over WebDAV (webdav mode). Install and update with the install.sh script from the repository.</description>
     <description lang="it">Ogni utente inserisce il client OAuth del proprio progetto Google, fa login e trova Google Drive come cartella nei File. I file passano da un container rclone, montato come cartella e mostrato con l'Archiviazione esterna (modalità mount) oppure servito via WebDAV (modalità webdav). Installazione e aggiornamento con lo script install.sh del repository.</description>
     <version>0.3.0</version>
-    <licence>agpl</licence>
+    <licence>CC-BY-NC-4.0</licence>
     <author>Antonello Migliorelli</author>
     <namespace>GDriveBridge</namespace>
     <types>
