@@ -2,37 +2,33 @@
 # =============================================================================
 #  Google Drive Bridge - installazione, aggiornamento e disinstallazione.
 #
-#  Va lanciato sul SERVER (host Docker), non dentro il container Nextcloud:
-#    curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash
-#  All'avvio chiede se installare/aggiornare o disinstallare. Senza chiedere:
-#    ... | sudo bash -s -- install   [NOME_CONTAINER_NEXTCLOUD]
-#    ... | sudo bash -s -- uninstall [NOME_CONTAINER_NEXTCLOUD]
+#  Va lanciato sul SERVER (host Docker), non dentro il container Nextcloud,
+#  indicando cosa fare (nessuna domanda durante l'esecuzione):
 #
-#  Installazione (si può rilanciare quante volte vuoi, anche per aggiornare l'app):
-#   1. trova il container Nextcloud, la sua cartella dati e l'utente PHP
-#   2. crea la cartella condivisa DENTRO la cartella dati di Nextcloud
-#      (già persistente: nessun volume da aggiungere, sopravvive agli aggiornamenti)
-#   3. scrive l'auth-proxy per rclone sull'host
-#   4. scarica l'app in custom_apps, la abilita e la configura
-#   5. avvia il container rclone sulla stessa rete di Nextcloud
+#    curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash -s -- install
+#
+#  Azioni:
+#    install            installa o aggiorna; modalità scelta da sola: mount se Nextcloud
+#                       ha già il volume /gdrive, altrimenti webdav
+#    install mount      modalità mount: rclone monta il Drive come cartella e Nextcloud la
+#                       vede con l'Archiviazione esterna (consigliata; serve una riga nel
+#                       compose di Nextcloud, lo script spiega quale)
+#    install webdav     modalità webdav: nessuna modifica a Nextcloud
+#    uninstall          rimuove app e container rclone, conserva i collegamenti degli
+#                       utenti (reinstallando, ognuno ritrova il proprio Drive collegato)
+#    uninstall purge    rimuove tutto: scollega gli utenti da Google e cancella
+#                       credenziali, impostazioni e cartelle dell'app
+#  Si può aggiungere il nome del container Nextcloud, se sul server ce n'è più d'uno:
+#    ... | sudo bash -s -- install NOME_CONTAINER
 #
 #  Variabili facoltative:
 #   REF=main              ramo/tag del repository da cui scaricare l'app
 #   REPO=mccoy88f/gdrive-rc-connector
 #   SRC_DIR=/percorso     installa da una copia locale del repository invece che da GitHub
 #   RCLONE_NAME=gdrive-rclone   nome del container rclone
-#   PROXY_DIR=/data/gdrive-bridge/proxy   dove salvare l'auth-proxy sull'host
-#   MODE=mount|webdav     modalità (altrimenti la chiede):
-#                           mount  rclone monta il Drive come cartella, Nextcloud la vede con
-#                                  l'Archiviazione esterna (consigliata; serve una riga nel
-#                                  compose di Nextcloud: /data/gdrive-bridge/mnt:/gdrive:rslave)
-#                           webdav l'app monta il WebDAV di rclone (nessuna modifica a Nextcloud)
+#   BASE_DIR=/data/gdrive-bridge   cartella sull'host per auth-proxy, mount e cache
 #   UPLOAD_WAIT=3600      secondi massimi di attesa degli upload in corso prima di riavviare rclone
-#   FORCE=1               riavvia rclone senza aspettare (gli upload in coda vanno persi)
-#
-#  Disinstallazione senza domande (es. in automatico):
-#   PURGE=1               rimuove anche collegamenti, credenziali e dati degli utenti
-#   YES=1                 non chiede conferma
+#   FORCE=1               riavvia/rimuove rclone senza aspettare gli upload in coda (vanno persi)
 # =============================================================================
 set -euo pipefail
 
@@ -44,13 +40,17 @@ PROXY_DIR="${PROXY_DIR:-$BASE_DIR/proxy}"
 MNT_DIR="${MNT_DIR:-$BASE_DIR/mnt}"        # modalità mount: punti di mount, visti da Nextcloud come /gdrive
 CACHE_DIR="${CACHE_DIR:-$BASE_DIR/cache}"  # modalità mount: cache di rclone (upload in coda)
 NC_MNT=/gdrive
-MODE="${MODE:-}"
+MODE=""
 APP=gdrivebridge
-ACTION="${ACTION:-}"
+ACTION=""
+PURGE=0
 NC=""
 for arg in "$@"; do
 	case "$arg" in
 		install|uninstall) ACTION="$arg" ;;
+		mount|webdav) MODE="$arg" ;;
+		purge) PURGE=1 ;;
+		-h|--help|help) ACTION=help ;;
 		*) NC="$arg" ;;
 	esac
 done
@@ -59,43 +59,25 @@ log()  { echo -e "\e[1;34m==>\e[0m $*"; }
 warn() { echo -e "\e[1;33m[ATTENZIONE]\e[0m $*" >&2; }
 err()  { echo -e "\e[1;31m[ERRORE]\e[0m $*" >&2; exit 1; }
 
-# Con "curl | bash" lo script arriva da stdin: le risposte si leggono dal terminale
-has_tty() { { : < /dev/tty; } 2>/dev/null; }
-# Legge un carattere alla volta: alcuni terminali web (es. quello di Coolify) mandano
-# l'Invio come \r invece di \n, e un normale "read" resterebbe in attesa per sempre
-ask() {
-	local answer="" c
-	if ! has_tty; then echo "$2"; return; fi
-	printf '%s' "$1" > /dev/tty
-	while IFS= read -r -s -n 1 c < /dev/tty; do
-		case "$c" in
-			$'\r' | $'\n' | '') break ;;
-			$'\x7f' | $'\b') [[ -n "$answer" ]] && { answer="${answer%?}"; printf '\b \b' > /dev/tty; } ;;
-			*) answer+="$c"; printf '%s' "$c" > /dev/tty ;;
-		esac
-	done
-	printf '\n' > /dev/tty
-	echo "${answer:-$2}"
-}
-
 [[ $EUID -eq 0 ]] || err "Esegui come root (sudo)."
 command -v docker >/dev/null || err "Docker non trovato: lancia lo script sul server, non dentro un container."
 
-if [[ -z "$ACTION" ]]; then
-	if has_tty; then
-		echo
-		echo "Google Drive Bridge per Nextcloud"
-		echo "  1) Installa o aggiorna"
-		echo "  2) Disinstalla"
-		case "$(ask 'Scelta [1]: ' 1)" in
-			1) ACTION=install ;;
-			2) ACTION=uninstall ;;
-			*) err "Scelta non valida." ;;
-		esac
-	else
-		ACTION=install
-	fi
+if [[ -z "$ACTION" || "$ACTION" == help ]]; then
+	cat << 'USO'
+Uso (sul server, non nel container Nextcloud):
+  curl -fsSL https://raw.githubusercontent.com/mccoy88f/gdrive-rc-connector/main/install.sh | sudo bash -s -- AZIONE
+
+AZIONE:
+  install            installa o aggiorna (modalità mount se Nextcloud ha il volume /gdrive, altrimenti webdav)
+  install mount      installa o aggiorna in modalità mount (consigliata)
+  install webdav     installa o aggiorna in modalità webdav
+  uninstall          rimuove app e rclone, conserva i collegamenti degli utenti
+  uninstall purge    rimuove tutto, compresi collegamenti e credenziali degli utenti
+USO
+	[[ "$ACTION" == help ]] && exit 0 || exit 1
 fi
+[[ "$PURGE" == 1 && "$ACTION" != uninstall ]] && err "'purge' vale solo con 'uninstall'."
+[[ -n "$MODE" && "$ACTION" != install ]] && err "'$MODE' vale solo con 'install'."
 
 # --- 1. Container Nextcloud --------------------------------------------------
 if [[ -z "$NC" ]]; then
@@ -198,29 +180,7 @@ APPS=$(docker exec "$NC" sh -c "[ -d '$WEB/custom_apps' ] && echo '$WEB/custom_a
 #  Disinstallazione
 # =============================================================================
 if [[ "$ACTION" == uninstall ]]; then
-	PURGE="${PURGE:-}"
-	if [[ -z "$PURGE" ]]; then
-		if has_tty; then
-			echo
-			echo "Cosa vuoi rimuovere?"
-			echo "  1) App e container rclone, ma conserva i collegamenti degli utenti"
-			echo "     (reinstallando, ognuno ritrova il proprio Google Drive già collegato)"
-			echo "  2) Tutto: scollega gli utenti da Google (revoca l'accesso), cancella le loro"
-			echo "     credenziali OAuth, il registro errori e le cartelle di collegamento"
-			case "$(ask 'Scelta [1]: ' 1)" in
-				1) PURGE=0 ;;
-				2) PURGE=1 ;;
-				*) err "Scelta non valida." ;;
-			esac
-		else
-			PURGE=0
-		fi
-	fi
-	if [[ "${YES:-0}" != 1 ]]; then
-		has_tty || err "Per disinstallare senza terminale aggiungi YES=1 (e PURGE=1 per rimuovere anche i dati)."
-		[[ "$PURGE" == 1 ]] && what="TUTTO (collegamenti e credenziali degli utenti compresi)" || what="app e rclone (i collegamenti restano)"
-		[[ "$(ask "Confermi la rimozione di: $what? [s/N] " n)" =~ ^[sSyY] ]] || { log "Annullato."; exit 0; }
-	fi
+	[[ "$PURGE" == 1 ]] && log "Disinstallazione completa (purge)" || log "Disinstallazione (i collegamenti degli utenti restano)"
 
 	BRIDGE_DIR=$(occ config:app:get "$APP" bridge_dir 2>/dev/null | tr -d '\r' || true)
 	BRIDGE_DIR="${BRIDGE_DIR:-$DATADIR/.gdrive-bridge}"
@@ -311,29 +271,12 @@ fi
 # =============================================================================
 
 # --- Modalità ----------------------------------------------------------------
-CURRENT_MODE=$(occ config:app:get "$APP" mode 2>/dev/null | tr -d '\r' || true)
 if [[ -z "$MODE" ]]; then
-	if nc_mount_ok || [[ "$CURRENT_MODE" == mount ]]; then DEFAULT=1; else DEFAULT=2; fi
-	if has_tty; then
-		echo
-		echo "Modalità:"
-		echo "  1) Mount (consigliata): rclone monta il Drive come cartella e Nextcloud la vede"
-		echo "     con l'Archiviazione esterna. Più robusta: video, file grandi, upload che"
-		echo "     sopravvivono ai riavvii. Serve una riga nel compose di Nextcloud (una volta sola)."
-		echo "  2) WebDAV: nessuna modifica a Nextcloud."
-		case "$(ask "Scelta [$DEFAULT]: " "$DEFAULT")" in
-			1) MODE=mount ;;
-			2) MODE=webdav ;;
-			*) err "Scelta non valida." ;;
-		esac
-	else
-		(( DEFAULT == 1 )) && MODE=mount || MODE=webdav
-	fi
+	nc_mount_ok && MODE=mount || MODE=webdav
 fi
-[[ "$MODE" == mount || "$MODE" == webdav ]] || err "MODE deve essere mount o webdav."
 
 if [[ "$MODE" == mount ]]; then
-	[[ -e /dev/fuse ]] || err "Questo server non ha FUSE (/dev/fuse): usa la modalità WebDAV (MODE=webdav)."
+	[[ -e /dev/fuse ]] || err "Questo server non ha FUSE (/dev/fuse): usa 'install webdav'."
 
 	# La cartella dei mount sull'host deve essere "condivisa", così i mount fatti da
 	# rclone arrivano a Nextcloud. Va preparata PRIMA di aggiungere il volume a
@@ -375,15 +318,12 @@ UNIT
 
         - '$MNT_DIR:$NC_MNT:rslave'
 
-  Salva, fai "Redeploy" della risorsa Nextcloud e poi rilancia questo script.
+  Salva, fai "Redeploy" della risorsa Nextcloud e poi rilancia questo script con 'install mount'.
   (Con docker compose o altri gestori: stesso volume, poi ricrea il container.)
 
 HELP
-		if has_tty && [[ "$(ask "Intanto installo/aggiorno in modalità WebDAV? [S/n] " s)" =~ ^[sSyY] ]]; then
-			MODE=webdav
-		else
-			exit 1
-		fi
+		log "Intanto installo/aggiorno in modalità webdav, così Google Drive continua a funzionare."
+		MODE=webdav
 	fi
 fi
 log "Modalità: $MODE"
@@ -535,5 +475,6 @@ fi
 
 echo
 log "Fatto (modalità $MODE)! Ogni utente ora va in Impostazioni personali → Google Drive."
+[[ "$MODE" == webdav ]] && echo "   Per la modalità mount (consigliata): rilancia con 'install mount', lo script spiega cosa serve."
 echo "   Se l'URI di reindirizzamento mostrato inizia con http:// ma usi HTTPS:"
 echo "   docker exec -u $NC_UID $NC php $WEB/occ config:system:set overwriteprotocol --value=https"
